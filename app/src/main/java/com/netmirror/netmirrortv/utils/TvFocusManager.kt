@@ -6,6 +6,7 @@ object TvFocusManager {
     var carousel: FocusRequester = FocusRequester()
     var selectedDrawerRequester: FocusRequester? = null
     var lastFocusedContentRequester: FocusRequester? = null
+    var lastFocusedSearchCardId: String? = null
 
     // Default focus target of the currently visible screen
     var currentScreenContentRequester: FocusRequester? = null

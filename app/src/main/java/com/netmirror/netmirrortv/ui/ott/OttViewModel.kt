@@ -25,6 +25,9 @@ class OttViewModel(
     private val _otts = MutableStateFlow<List<OttItem>>(emptyList())
     val otts: StateFlow<List<OttItem>> = _otts
 
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
     init {
         loadOtts()
     }
@@ -38,22 +41,27 @@ class OttViewModel(
                 val baseUrl = preferences.getBaseUrl()
 
                 if (baseUrl.isEmpty()) {
+                    _error.value = "OTT Page Loading Fail, Retry after some times."
                     _loading.value = false
                     return@launch
                 }
 
                 val apiService = ApiClient.create(baseUrl)
                 val repository = OttRepository(apiService)
+                val userToken = com.netmirror.netmirrortv.util.TokenStore.getUserToken(getApplication()) ?: ""
+                android.util.Log.d("UserToken", "OttViewModel.loadOtts -> Usertoken: '$userToken'")
 
-                repository.getOtts()?.let {
-
-                    _background.value = it.bg_img
-                    _otts.value = it.ott
-
+                val response = repository.getOtts(userToken)
+                if (response != null) {
+                    _background.value = response.bg_img
+                    _otts.value = response.ott
+                } else {
+                    _error.value = "OTT Page Loading Fail, Retry after some times."
                 }
 
             } catch (e: Exception) {
                 e.printStackTrace()
+                _error.value = "OTT Page Loading Fail, Retry after some times."
             } finally {
                 _loading.value = false
             }

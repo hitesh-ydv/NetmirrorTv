@@ -44,7 +44,9 @@ interface ApiService {
         "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
     )
     @GET("newtv/ott.php")
-    suspend fun getOtts(): Response<OttResponse>
+    suspend fun getOtts(
+        @Header("Usertoken") userToken: String = ""
+    ): Response<OttResponse>
 
     @GET("newtv/navbar.php")
     suspend fun getNavbar(
@@ -60,6 +62,8 @@ interface ApiService {
     @GET("newtv/main.php")
     suspend fun getHome(
         @Header("Ott") ott: String,
+
+        @Header("Usertoken") userToken: String = "",
 
         @Header("Page")
         page: String = "all",
@@ -77,6 +81,9 @@ interface ApiService {
 
         @Header("Ott")
         ott: String,
+
+        @Header("Usertoken")
+        userToken: String = "",
 
         @Header("X-Requested-With")
         request: String = "NetmirrorNewTV v1.0",
@@ -97,6 +104,9 @@ interface ApiService {
 
         @Header("Ott")
         ott: String,
+
+        @Header("Usertoken")
+        userToken: String = "",
 
         @Header("X-Requested-With")
         request: String = "NetmirrorNewTV v1.0",

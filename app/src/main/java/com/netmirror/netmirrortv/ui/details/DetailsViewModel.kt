@@ -40,12 +40,12 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
     val state: StateFlow<DetailsUiState> = _state
 
     // Avoid re-fetching if the same id is re-loaded (e.g. on config change)
-    private var loadedId: Int? = null
+    private var loadedId: String? = null
 
     private val _episodesState = MutableStateFlow(EpisodesUiState())
     val episodesState: StateFlow<EpisodesUiState> = _episodesState
 
-    fun load(id: Int, force: Boolean = false) {
+    fun load(id: String, force: Boolean = false) {
         if (!force && id == loadedId && _state.value is DetailsUiState.Success) return
 
         viewModelScope.launch {
@@ -60,7 +60,9 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
             }
 
             val api = ApiClient.create(baseUrl)
-            runCatching { api.getDetails(id = id.toString(), ott = ott) }
+            val userToken = com.netmirror.netmirrortv.util.TokenStore.getUserToken(getApplication()) ?: ""
+            android.util.Log.d("UserToken", "DetailsViewModel.load -> Usertoken: '$userToken'")
+            runCatching { api.getDetails(id = id, ott = ott, userToken = userToken) }
                 .onSuccess { response ->
                     _state.value = if (response.status == "ok") {
                         loadedId = id

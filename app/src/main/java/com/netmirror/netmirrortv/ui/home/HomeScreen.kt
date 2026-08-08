@@ -60,26 +60,23 @@ fun HomeScreen(
     // Holds the FocusRequester of the first card of the first row
     val firstCardRequester = remember { mutableStateOf<FocusRequester?>(null) }
 
-    // Request focus on carousel initially, or restore the last focused card if present
-    LaunchedEffect(homeResponse.slider) {
-        if (homeResponse.slider.isNotEmpty()) {
-            TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
-            TvFocusManager.carousel.requestFocus()
-        } else {
-            TvFocusManager.currentScreenContentRequester = firstCardRequester.value
-        }
-    }
-
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val density = LocalDensity.current
     val sliderItemOffset = if (homeResponse.slider.isNotEmpty()) 1 else 0
 
-    // Warm Coil's cache for the row just below what's currently visible, *before* the user
-    // scrolls/focuses into it. Without this, the moment a new row's LazyRow first composes,
-    // every AsyncImage in it fires a fresh network+decode request at once — that burst is
-    // what causes the vertical focus jerk on low-end TVs. Horizontal focus is smooth because
-    // by then those cards are already composed and their images already resolved.
+    // When returning to Home screen: focus on the exact card that was clicked to go to details
+    LaunchedEffect(Unit) {
+        if (!TvFocusManager.moveFocusToContent()) {
+            if (homeResponse.slider.isNotEmpty()) {
+                TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
+                TvFocusManager.carousel.requestFocus()
+            } else {
+                TvFocusManager.currentScreenContentRequester = firstCardRequester.value
+            }
+        }
+    }
+
     LaunchedEffect(listState, homeResponse.post) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .filterNotNull()
@@ -137,31 +134,33 @@ fun HomeScreen(
                     slider = homeResponse.slider,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(screenHeight * 0.8f),
+                        .height(screenHeight * 0.85f),
                     onPlay = {},
-                    firstCardRequester = firstCardRequester.value
+                    firstCardRequester = firstCardRequester.value,
+                    appNavController = appNavController
                 )
             }
         }
-        itemsIndexed(
-            items = homeResponse.post,
-            key = { _, row -> "${row.row}-${row.cate}" },
-            contentType = { _, row -> row.row },
-        ) { index, row ->
-            // Stabilize the lambda per row index to avoid unnecessary recomposition
-            val onFirstCardRequester = remember(index) {
-                if (index == 0) { requester: FocusRequester ->
-                    firstCardRequester.value = requester
-                } else null
+        homeResponse.post.forEachIndexed { index, row ->
+            item(
+                key = row.cate.ifEmpty { "${row.row}_$index" },
+                contentType = row.row
+            ) {
+                // Stabilize the lambda per row index to avoid unnecessary recomposition
+                val onFirstCardRequester = remember(index) {
+                    if (index == 0) { requester: FocusRequester ->
+                        firstCardRequester.value = requester
+                    } else null
+                }
+                HomeMediaRow(
+                    row = row,
+                    rowPosition = index,
+                    horizontalImageTemplate = homeResponse.imageCdnHorizontal ?: homeResponse.imageCdn,
+                    verticalImageTemplate = homeResponse.imageCdnVertical ?: homeResponse.imageCdn,
+                    appNavController = appNavController,
+                    onFirstCardRequester = onFirstCardRequester,
+                )
             }
-            HomeMediaRow(
-                row = row,
-                rowPosition = index,
-                horizontalImageTemplate = homeResponse.imageCdnHorizontal ?: homeResponse.imageCdn,
-                verticalImageTemplate = homeResponse.imageCdnVertical ?: homeResponse.imageCdn,
-                appNavController = appNavController,
-                onFirstCardRequester = onFirstCardRequester,
-            )
         }
     }
 }

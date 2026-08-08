@@ -22,6 +22,9 @@ class HomeViewModel(
     private val _home = MutableStateFlow<HomeResponse?>(null)
     val home: StateFlow<HomeResponse?> = _home
 
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
     init {
 
         viewModelScope.launch {
@@ -43,7 +46,15 @@ class HomeViewModel(
         viewModelScope.launch {
             try {
                 _loading.value = true
-                _home.value = repository.getHome(page)
+                _error.value = null
+                val result = repository.getHome(page)
+                _home.value = result
+                if (result == null) {
+                    _error.value = "Main Page Loading Fail, Retry after some times."
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _error.value = "Main Page Loading Fail, Retry after some times."
             } finally {
                 _loading.value = false
             }

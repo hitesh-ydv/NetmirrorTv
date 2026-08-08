@@ -2,6 +2,7 @@ package com.netmirror.netmirrortv.util
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 
 /**
  * Manages user token storage and expiration in SharedPreferences.
@@ -24,6 +25,7 @@ object TokenStore {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun saveUserToken(context: Context, token: String) {
+        Log.d("UserToken", "saveUserToken: $token")
         prefs(context).edit()
             .putString(KEY_USER_TOKEN, token)
             .putLong(KEY_TOKEN_TIMESTAMP, System.currentTimeMillis())
@@ -32,15 +34,21 @@ object TokenStore {
 
     fun getUserToken(context: Context): String? {
         val prefs = prefs(context)
-        val token = prefs.getString(KEY_USER_TOKEN, null) ?: return null
+        val token = prefs.getString(KEY_USER_TOKEN, null)
+        if (token == null) {
+            Log.d("UserToken", "getUserToken: null (no token saved)")
+            return null
+        }
         val savedTime = prefs.getLong(KEY_TOKEN_TIMESTAMP, 0L)
         val currentTime = System.currentTimeMillis()
 
         return if (currentTime - savedTime > CURRENT_EXPIRATION_MS) {
+            Log.d("UserToken", "getUserToken: expired (clearing token)")
             // Token expired -> clear and return null
             clearToken(context)
             null
         } else {
+            Log.d("UserToken", "getUserToken: valid token = '$token'")
             token
         }
     }

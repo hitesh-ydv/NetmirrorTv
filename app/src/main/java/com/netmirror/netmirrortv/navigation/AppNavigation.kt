@@ -31,8 +31,8 @@ object Routes {
     // AppNavigation's composable() block.
     const val OTP = "otp/{apiUrl}"
 
-    fun details(id: Int) = "details/$id"
-    fun player(id: Int) = "player/$id"
+    fun details(id: String) = "details/$id"
+    fun player(id: String) = "player/$id"
     fun otp(apiUrl: String) = "otp/${Uri.encode(apiUrl)}"
 }
 
@@ -71,11 +71,11 @@ fun AppNavigation(
             route = Routes.DETAILS,
             arguments = listOf(
                 navArgument("id") {
-                    type = NavType.IntType
+                    type = NavType.StringType
                 }
             )
         ) { backStackEntry ->
-            val id = backStackEntry.arguments?.getInt("id") ?: 0
+            val id = backStackEntry.arguments?.getString("id") ?: ""
             DetailsScreen(navController, id)
         }
 
@@ -83,13 +83,13 @@ fun AppNavigation(
             route = Routes.PLAYER,
             arguments = listOf(
                 navArgument("id") {
-                    type = NavType.IntType
+                    type = NavType.StringType
                 }
             )
         ) { backStackEntry ->
             // For testing purposes, we ignore the passed id and use fixed test data.
             // In production, you would fetch the stream details using the id.
-            val id = backStackEntry.arguments?.getInt("id") ?: 0
+            val id = backStackEntry.arguments?.getString("id") ?: ""
 
             PlayerScreen(
             )

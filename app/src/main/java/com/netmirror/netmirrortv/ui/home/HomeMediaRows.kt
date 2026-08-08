@@ -50,13 +50,15 @@ import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
 import com.netmirror.netmirrortv.utils.TvFocusManager
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import com.netmirror.netmirrortv.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -75,7 +77,7 @@ private val CardBorderColor = Color.White
 private val CardFocusedContainerColor = Color(0xFF303030)
 private val CardContainerColor = Color(0xFF202020)
 
-internal val PortraitCardWidth = 140.dp
+internal val PortraitCardWidth = 150.dp
 internal val LandscapeCardWidth = 200.dp
 internal const val PortraitAspectRatio = 2f / 3f
 internal const val LandscapeAspectRatio = 16f / 9f
@@ -108,6 +110,8 @@ internal fun HomeMediaRow(
 
     val cardFocusRequesters = remember(ids) { ids.map { FocusRequester() } }
     var lastFocusedIndex by remember(ids) { mutableIntStateOf(0) }
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
 
     val isTop10Row = row.cate.contains("top 10", ignoreCase = true)
 
@@ -149,6 +153,7 @@ internal fun HomeMediaRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoViewRequester)
             .padding(top = 16.dp, bottom = 12.dp)
     ) {
         Text(
@@ -166,7 +171,7 @@ internal fun HomeMediaRow(
         ) {
             itemsIndexed(
                 items = ids,
-                key = { _, id -> id },
+                key = { index, id -> "${id}_$index" },
                 contentType = { _, _ -> if (isPortraitRow) "portrait" else "landscape" },
             ) { index, id ->
                 // Stable across recompositions of this slot (only changes if index/requester
@@ -175,6 +180,11 @@ internal fun HomeMediaRow(
                     {
                         lastFocusedIndex = index
                         TvFocusManager.lastFocusedContentRequester = cardFocusRequesters[index]
+                        if (index == 0) {
+                            coroutineScope.launch {
+                                bringIntoViewRequester.bringIntoView()
+                            }
+                        }
                     }
                 }
                 HomeMediaCard(
@@ -245,7 +255,8 @@ private fun HomeMediaCard(
 
         Card(
             onClick = {
-                appNavController.navigate(Routes.details(id.toInt()))
+                onFocused()
+                appNavController.navigate(Routes.details(id))
             },
             modifier = Modifier
                 .fillMaxSize()

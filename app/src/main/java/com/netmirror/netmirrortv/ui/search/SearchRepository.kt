@@ -6,9 +6,7 @@ import com.netmirror.netmirrortv.network.ApiClient
 import com.netmirror.netmirrortv.model.SearchResponse
 
 class SearchRepository(
-
-    application: Application
-
+    private val application: Application
 ) {
 
     private val preferences = AppPreferences(application)
@@ -24,11 +22,14 @@ class SearchRepository(
 
         val api = ApiClient.create(baseUrl)
 
+        val userToken = com.netmirror.netmirrortv.util.TokenStore.getUserToken(application) ?: ""
+        android.util.Log.d("UserToken", "SearchRepository.search -> Usertoken: '$userToken'")
+
         // Blank means "no query yet" (initial load or cleared field). Pass null
         // so Retrofit omits the "s" param entirely -> backend returns Top Searches.
         val queryText: String? = text.trim().ifBlank { null }
 
-        return api.search(ott = ott, text = queryText)
+        return api.search(ott = ott, userToken = userToken, text = queryText)
     }
 
 }

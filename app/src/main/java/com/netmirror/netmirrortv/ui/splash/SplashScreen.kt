@@ -43,6 +43,20 @@ import com.netmirror.netmirrortv.network.BaseUrlProvider
 import com.netmirror.netmirrortv.util.TokenStore
 import kotlinx.coroutines.launch
 
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+import com.netmirror.netmirrortv.ui.components.AppToast
+
 // Static brushes — allocated once per process, never touched by the
 // animation loop. Only opacity/scale/position are animated on top of these.
 private val GlowBrush = Brush.radialGradient(
@@ -61,6 +75,16 @@ fun SplashScreen(
     // API call sirf ek baar
     LaunchedEffect(Unit) {
         viewModel.checkServer()
+    }
+
+    LaunchedEffect(uiState.error) {
+        if (uiState.error != null) {
+            Toast.makeText(
+                context,
+                "Internet Error\nDownload Updated app from netmirror.gg",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     LaunchedEffect(uiState.isSuccess) {
@@ -109,6 +133,17 @@ fun SplashScreen(
             Spacer(modifier = Modifier.height(48.dp))
 
             DotsLoader()
+        }
+
+        if (uiState.error != null) {
+            AppToast(
+                title = "Internet Error",
+                message = "Download Updated app from netmirror.gg",
+                durationMs = 8000L,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 40.dp)
+            )
         }
     }
 }

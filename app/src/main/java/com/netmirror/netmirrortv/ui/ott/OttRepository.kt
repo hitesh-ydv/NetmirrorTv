@@ -6,9 +6,9 @@ class OttRepository(
     private val apiService: ApiService
 ) {
 
-    suspend fun getOtts(): OttResponse? {
+    suspend fun getOtts(userToken: String = ""): OttResponse? {
 
-        val response = apiService.getOtts()
+        val response = apiService.getOtts(userToken = userToken)
 
         return if (response.isSuccessful) {
             response.body()

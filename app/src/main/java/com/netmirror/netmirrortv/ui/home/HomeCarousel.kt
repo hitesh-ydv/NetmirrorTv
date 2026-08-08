@@ -70,13 +70,17 @@ import coil.request.ImageRequest
 import coil.size.Size
 import com.netmirror.netmirrortv.utils.TvFocusManager
 
+import androidx.navigation.NavHostController
+import com.netmirror.netmirrortv.navigation.Routes
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HomeCarousel(
     slider: List<SliderItem>,
     modifier: Modifier = Modifier,
-    onPlay: (SliderItem) -> Unit,
+    onPlay: (SliderItem) -> Unit = {},
     firstCardRequester: FocusRequester? = null,
+    appNavController: NavHostController,
 ) {
     if (slider.isEmpty()) return
 
@@ -137,6 +141,15 @@ fun HomeCarousel(
                     .onPreviewKeyEvent { event ->
                         when {
                             event.type == KeyEventType.KeyDown &&
+                                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                                val activeItem = slider.getOrNull(carouselState.activeItemIndex)
+                                if (activeItem != null) {
+                                    TvFocusManager.lastFocusedContentRequester = TvFocusManager.carousel
+                                    appNavController.navigate(Routes.details(activeItem.id))
+                                }
+                                true
+                            }
+                            event.type == KeyEventType.KeyDown &&
                                     event.key == Key.DirectionLeft -> {
                                 TvFocusManager.moveFocusToDrawer()
                                 true
@@ -157,26 +170,6 @@ fun HomeCarousel(
                     }
             ) { index ->
                 val item = slider[index]
-                // Only run the continuous zoom while the carousel actually has focus. Once the
-                // user moves focus down into the rows, this animation would otherwise keep
-                // ticking every frame purely to update a value nothing reads yet — right when
-                // the rows below need every bit of frame budget to compose and decode images.
-                val scale: Float = if (isCarouselFocused) {
-                    val transition = rememberInfiniteTransition(label = "kenBurns")
-                    val animatedScale by transition.animateFloat(
-                        initialValue = 1f,
-                        targetValue = 1.08f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(durationMillis = 14000, easing = FastOutSlowInEasing),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "kenBurnsScale",
-                    )
-                    animatedScale
-                } else {
-                    1f
-                }
-
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Optimized background image
                     AsyncImage(

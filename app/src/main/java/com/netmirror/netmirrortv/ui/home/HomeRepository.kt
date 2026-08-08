@@ -7,7 +7,7 @@ import com.netmirror.netmirrortv.network.ApiClient
 import com.netmirror.netmirrortv.utils.AppSession
 
 class HomeRepository(
-    application: Application
+    private val application: Application
 ) {
 
     private val preferences = AppPreferences(application)
@@ -21,9 +21,12 @@ class HomeRepository(
         val ott = preferences.getOtt()
 
         val api = ApiClient.create(baseUrl)
+        val userToken = com.netmirror.netmirrortv.util.TokenStore.getUserToken(application) ?: ""
+        Log.d("UserToken", "HomeRepository.getHome -> Usertoken: '$userToken'")
 
         return api.getHome(
             ott = AppSession.currentOtt(),
+            userToken = userToken,
             page = page
         )
 

@@ -60,17 +60,25 @@ import coil.size.Size
 import com.netmirror.netmirrortv.model.SearchItem
 import com.netmirror.netmirrortv.utils.TvFocusManager
 
+import androidx.navigation.NavHostController
+import com.netmirror.netmirrortv.navigation.Routes
+import com.netmirror.netmirrortv.ui.components.AppToast
+import kotlinx.coroutines.delay
+
 private val RowCardShape = RoundedCornerShape(8.dp)
 private val CardBorderColor = Color.White
 private val CardContainerColor = Color(0xFF1A1A1A)
 private val CardFocusedContainerColor = Color(0xFF262626)
-private const val CardFocusedScale = 1.1f
+private const val CardFocusedScale = 1.04f
 
 // ---------------------------------------------------------------------------
 
 @Composable
 fun SearchScreen(
-    onItemClick: (SearchItem) -> Unit = {},
+    appNavController: NavHostController? = null,
+    onItemClick: (SearchItem) -> Unit = { item ->
+        appNavController?.navigate(Routes.details(item.id))
+    },
     viewModel: SearchViewModel = viewModel()
 ) {
     val loading by viewModel.loading.collectAsState()
@@ -79,100 +87,165 @@ fun SearchScreen(
 
     var query by remember { mutableStateOf("") }
     val searchFieldFocusRequester = remember { FocusRequester() }
-    val firstCardFocusRequester = remember { FocusRequester() }
 
     TvFocusManager.currentScreenContentRequester = searchFieldFocusRequester
 
-    // Load "Top Searches" as soon as the screen opens. Passing "" here is
-    // intentional and safe: SearchRepository converts a blank query to null
-    // before calling the API, so the "s" param is omitted from the request
-    // and the backend returns Top Searches.
-    LaunchedEffect(Unit) {
-        viewModel.search("")
-        searchFieldFocusRequester.requestFocus()
+    val results = searchResult?.searchResult.orEmpty()
+    val cardFocusRequesters = remember(results) { results.map { FocusRequester() } }
+
+    // Restore focus to clicked search card by ID when returning from details screen
+    LaunchedEffect(results) {
+        val lastCardId = TvFocusManager.lastFocusedSearchCardId
+        if (!lastCardId.isNullOrEmpty() && results.isNotEmpty()) {
+            val targetIndex = results.indexOfFirst { it.id == lastCardId }
+            if (targetIndex != -1 && targetIndex < cardFocusRequesters.size) {
+                val requester = cardFocusRequesters[targetIndex]
+                TvFocusManager.lastFocusedContentRequester = requester
+                repeat(5) { attempt ->
+                    val focused = runCatching { requester.requestFocus() }.getOrDefault(false)
+                    if (focused) return@LaunchedEffect
+                    delay(50L * (attempt + 1))
+                }
+            } else {
+                searchFieldFocusRequester.requestFocus()
+            }
+        } else {
+            searchFieldFocusRequester.requestFocus()
+        }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .padding(start = 100.dp,top = 30.dp, bottom = 30.dp)
+    // 5-second debouncing on text input. Blank queries trigger immediately.
+    LaunchedEffect(query) {
+        if (query.isBlank()) {
+            viewModel.search("")
+        } else {
+            delay(3000L)
+            viewModel.search(query)
+        }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
-        SearchField(
-            query = query,
-            onQueryChange = {
-                query = it
-                // "" (field cleared) is intentionally forwarded as-is; the
-                // repository turns it into a null "s" param -> Top Searches.
-                viewModel.search(it)
-            },
-            focusRequester = searchFieldFocusRequester,
-            onDownPressed = {
-                runCatching { firstCardFocusRequester.requestFocus() }.isSuccess
-            }
-        )
-
-        Spacer(Modifier.height(28.dp))
-
-        val results = searchResult?.searchResult.orEmpty()
-
-        when {
-            loading && results.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Color.White)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .padding(start = 100.dp, top = 30.dp, bottom = 30.dp)
+        ) {
+            SearchField(
+                query = query,
+                onQueryChange = {
+                    query = it
+                    TvFocusManager.lastFocusedSearchCardId = null
+                },
+                focusRequester = searchFieldFocusRequester,
+                onDownPressed = {
+                    runCatching { cardFocusRequesters.firstOrNull()?.requestFocus() }.isSuccess
                 }
-            }
+            )
 
-            error != null -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = error ?: "Something went wrong",
-                        color = MaterialTheme.colorScheme.error
-                    )
+            Spacer(Modifier.height(28.dp))
+
+            when {
+                loading -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 40.dp),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        CircularProgressIndicator(color = Color.White)
+                    }
                 }
-            }
 
-            results.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = if (query.isBlank()) "No results" else "No results found for \"$query\"",
-                        color = Color.White.copy(alpha = 0.7f)
-                    )
-                }
-            }
-
-            else -> {
-                val heading = searchResult?.head
-                    ?: if (query.isBlank()) "Top Searches" else "Results"
-
-                Text(
-                    text = heading,
-                    color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleLarge
-                )
-
-                Spacer(Modifier.height(16.dp))
-
-                val imgTemplate = searchResult?.imgcdn.orEmpty()
-
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(start = 7.dp, end = 10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    itemsIndexed(results, key = { _, item -> item.id }) { index, item ->
-                        SearchResultCard(
-                            item = item,
-                            imageUrl = buildImageUrl(imgTemplate, item.id),
-                            isFirstInRow = index == 0,
-                            focusRequester = if (index == 0) firstCardFocusRequester else null,
-                            onClick = { onItemClick(item) }
+                error != null -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 40.dp),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        Text(
+                            text = error ?: "Search Page Loading Fail, Retry after some times.",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
                         )
                     }
                 }
+
+                results.isEmpty() -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 40.dp),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        Text(
+                            text = if (query.isBlank()) "No results" else "No results found for \"$query\"",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                }
+
+                else -> {
+                    val heading = searchResult?.head
+                        ?: if (query.isBlank()) "Top Searches" else "Results"
+
+                    Text(
+                        text = heading,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+
+                    Spacer(Modifier.height(16.dp))
+
+                    val imgTemplate = searchResult?.imgcdn.orEmpty()
+                    val isPortraitRow = searchResult?.row.equals("v", ignoreCase = true)
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(start = 7.dp, end = 10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        itemsIndexed(results, key = { _, item -> item.id }) { index, item ->
+                            val cardRequester = cardFocusRequesters.getOrNull(index)
+                            SearchResultCard(
+                                item = item,
+                                imageUrl = buildImageUrl(imgTemplate, item.id),
+                                isPortrait = isPortraitRow,
+                                isFirstInRow = index == 0,
+                                focusRequester = cardRequester,
+                                onClick = {
+                                    if (cardRequester != null) {
+                                        TvFocusManager.lastFocusedContentRequester = cardRequester
+                                        TvFocusManager.lastFocusedSearchCardId = item.id
+                                    }
+                                    onItemClick(item)
+                                }
+                            )
+                        }
+                    }
+                }
             }
+        }
+
+        if (error != null) {
+            AppToast(
+                title = "Network Error",
+                message = "Search Page Loading Fail, Retry after some times.",
+                durationMs = 6000L,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 40.dp)
+            )
         }
     }
 }
@@ -240,6 +313,7 @@ private fun SearchField(
 private fun SearchResultCard(
     item: SearchItem,
     imageUrl: String,
+    isPortrait: Boolean,
     isFirstInRow: Boolean,
     focusRequester: FocusRequester? = null,
     onFocused: () -> Unit = {},
@@ -248,10 +322,8 @@ private fun SearchResultCard(
     val cardFocusRequester = focusRequester ?: remember { FocusRequester() }
     val context = LocalContext.current
     val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
-    val isPortrait = configuration.screenWidthDp < configuration.screenHeightDp
 
-    val cardWidth = if (isPortrait) 110.dp else 200.dp
+    val cardWidth = if (isPortrait) 150.dp else 200.dp
     val aspectRatio = if (isPortrait) 2f / 3f else 16f / 9f
 
     val widthPx = with(density) { cardWidth.toPx() }.toInt()
@@ -305,28 +377,6 @@ private fun SearchResultCard(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
-
-            // Show the title when we have one. Top Searches items with no
-            // title just show the image with no label overlay.
-            val labelText = item.title?.takeIf { it.isNotBlank() }
-
-            if (labelText != null) {
-                Text(
-                    text = labelText,
-                    maxLines = 1,
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color.Transparent, Color.Black)
-                            )
-                        )
-                        .padding(6.dp)
-                )
-            }
         }
     }
 }

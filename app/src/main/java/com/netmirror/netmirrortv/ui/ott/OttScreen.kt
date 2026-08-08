@@ -48,6 +48,8 @@ import coil.compose.AsyncImage
 import com.netmirror.netmirrortv.utils.TvFocusManager
 import kotlinx.coroutines.delay
 
+import com.netmirror.netmirrortv.ui.components.AppToast
+
 private val CARD_WIDTH = 200.dp
 private val CARD_HEIGHT = 105.dp
 
@@ -58,6 +60,7 @@ fun OttScreen(
 
     val loading by viewModel.loading.collectAsState()
     val otts by viewModel.otts.collectAsState()
+    val error by viewModel.error.collectAsState()
 
     val firstCardFocusRequester = remember {
         FocusRequester()
@@ -131,6 +134,17 @@ fun OttScreen(
                     }
                 }
             }
+        }
+
+        if (error != null) {
+            AppToast(
+                title = "Network Error",
+                message = "OTT Page Loading Fail, Retry after some times.",
+                durationMs = 6000L,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 40.dp)
+            )
         }
     }
 }

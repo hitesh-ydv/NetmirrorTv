@@ -76,7 +76,7 @@ private object NoOpBringIntoViewSpec : BringIntoViewSpec {
 @Composable
 fun DetailsScreen(
     navController: NavHostController,
-    id: Int,
+    id: String,
     viewModel: DetailsViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsState()

@@ -56,15 +56,15 @@ class SearchViewModel(
                 val result = repository.search(query)
 
                 if (result == null) {
-                    _error.value = "Server not configured. Please check your settings."
+                    _error.value = "Search Page Loading Fail, Retry after some times."
                 } else if (!result.error.isNullOrEmpty()) {
-                    _error.value = result.error
+                    _error.value = "Search Page Loading Fail, Retry after some times."
                 }
 
                 _searchResult.value = result
 
             } catch (e: Exception) {
-                _error.value = e.message ?: "Something went wrong. Please try again."
+                _error.value = "Search Page Loading Fail, Retry after some times."
             } finally {
                 _loading.value = false
             }

@@ -124,8 +124,18 @@ fun AppModalNavigationDrawer(
 
     val viewModel: NavbarViewModel = viewModel()
     val navbar by viewModel.navbar.collectAsState()
+    val selectedOtt by com.netmirror.netmirrortv.utils.AppSession.selectedOtt.collectAsState()
 
-    val selectedItemIndex = selectedIndex.coerceIn(appNavDrawerItems.indices)
+    val isHsOtt = selectedOtt.equals("hs", ignoreCase = true)
+    val visibleDrawerItems = remember(isHsOtt) {
+        if (isHsOtt) {
+            appNavDrawerItems.filter { it.label != "TV Shows" && it.label != "Movies" }
+        } else {
+            appNavDrawerItems
+        }
+    }
+
+    val selectedItemIndex = if (isHsOtt && (selectedIndex == 1 || selectedIndex == 2)) 0 else selectedIndex.coerceIn(appNavDrawerItems.indices)
     val focusRequesters = remember {
         appNavDrawerItems.map { FocusRequester() }
     }
@@ -186,23 +196,24 @@ fun AppModalNavigationDrawer(
                 modifier = Modifier.focusRestorer(focusRequesters[selectedItemIndex])
             ) {
 
-                appNavDrawerItems.forEachIndexed { index, item ->
+                visibleDrawerItems.forEach { item ->
+                    val originalIndex = appNavDrawerItems.indexOf(item)
 
                     CustomNavDrawerItem(
                         item = item,
-                        selected = selectedItemIndex == index,
+                        selected = selectedItemIndex == originalIndex,
                         showLabel = drawerHasFocus,
                         onClick = {
-                            if (selectedItemIndex != index) {
-                                onItemSelected(index)
+                            if (selectedItemIndex != originalIndex) {
+                                onItemSelected(originalIndex)
                             }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .focusRequester(focusRequesters[index])
+                            .focusRequester(focusRequesters[originalIndex])
                             .onFocusChanged {
                                 if (it.isFocused) {
-                                    TvFocusManager.selectedDrawerRequester = focusRequesters[index]
+                                    TvFocusManager.selectedDrawerRequester = focusRequesters[originalIndex]
                                 }
                             }
                             .onPreviewKeyEvent { event ->
