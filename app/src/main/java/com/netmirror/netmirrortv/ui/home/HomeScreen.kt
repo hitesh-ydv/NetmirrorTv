@@ -19,6 +19,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,21 +60,44 @@ fun HomeScreen(
     val homeResponse = home ?: return
 
     // Holds the FocusRequester of the first card of the first row
-    val firstCardRequester = remember { mutableStateOf<FocusRequester?>(null) }
+    val firstCardFocusRequester = remember { FocusRequester() }
 
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val density = LocalDensity.current
-    val sliderItemOffset = if (homeResponse.slider.isNotEmpty()) 1 else 0
+    val hasCarousel = homeResponse.slider.isNotEmpty()
+    val sliderItemOffset = if (hasCarousel) 1 else 0
 
-    // When returning to Home screen: focus on the exact card that was clicked to go to details
-    LaunchedEffect(Unit) {
-        if (!TvFocusManager.moveFocusToContent()) {
-            if (homeResponse.slider.isNotEmpty()) {
+    val selectedPage by viewModel.page.collectAsState()
+    val selectedOtt by com.netmirror.netmirrortv.utils.AppSession.selectedOtt.collectAsState()
+
+    var lastPage by rememberSaveable { mutableStateOf(selectedPage) }
+    var lastOtt by rememberSaveable { mutableStateOf(selectedOtt) }
+
+    LaunchedEffect(firstCardFocusRequester, hasCarousel) {
+        TvFocusManager.firstCardRequester = firstCardFocusRequester
+        if (hasCarousel) {
+            TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
+        } else {
+            TvFocusManager.currentScreenContentRequester = firstCardFocusRequester
+        }
+    }
+
+    // When switching page or OTT provider: scroll to top index and reset focus
+    LaunchedEffect(selectedPage, selectedOtt) {
+        if (selectedPage != lastPage || selectedOtt != lastOtt) {
+            lastPage = selectedPage
+            lastOtt = selectedOtt
+            listState.scrollToItem(0)
+            TvFocusManager.lastFocusedContentRequester = null
+            TvFocusManager.lastFocusedHomeCardId = null
+            TvFocusManager.lastFocusedHomeRowPosition = null
+            TvFocusManager.isCarouselLastFocused = false
+            TvFocusManager.firstCardRequester = firstCardFocusRequester
+            if (hasCarousel) {
                 TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
-                TvFocusManager.carousel.requestFocus()
             } else {
-                TvFocusManager.currentScreenContentRequester = firstCardRequester.value
+                TvFocusManager.currentScreenContentRequester = firstCardFocusRequester
             }
         }
     }
@@ -100,7 +125,7 @@ fun HomeScreen(
                 row.ids.split(',')
                     .map(String::trim)
                     .filter(String::isNotEmpty)
-                    .take(6) // only the cards likely to be on/near screen when the row lands
+                    .take(6)
                     .forEach { id ->
                         val url = resolveCardImageUrl(template, id)
                         if (url.isNotEmpty()) {
@@ -128,7 +153,7 @@ fun HomeScreen(
             .background(Color.Black)
             .padding(start = 100.dp)
     ) {
-        if (homeResponse.slider.isNotEmpty()) {
+        if (hasCarousel) {
             item(key = "home-carousel", contentType = "carousel") {
                 HomeCarousel(
                     slider = homeResponse.slider,
@@ -136,7 +161,7 @@ fun HomeScreen(
                         .fillMaxWidth()
                         .height(screenHeight * 0.85f),
                     onPlay = {},
-                    firstCardRequester = firstCardRequester.value,
+                    firstCardRequester = firstCardFocusRequester,
                     appNavController = appNavController
                 )
             }
@@ -146,19 +171,25 @@ fun HomeScreen(
                 key = row.cate.ifEmpty { "${row.row}_$index" },
                 contentType = row.row
             ) {
-                // Stabilize the lambda per row index to avoid unnecessary recomposition
-                val onFirstCardRequester = remember(index) {
-                    if (index == 0) { requester: FocusRequester ->
-                        firstCardRequester.value = requester
-                    } else null
-                }
                 HomeMediaRow(
                     row = row,
                     rowPosition = index,
+                    hasCarousel = hasCarousel,
                     horizontalImageTemplate = homeResponse.imageCdnHorizontal ?: homeResponse.imageCdn,
                     verticalImageTemplate = homeResponse.imageCdnVertical ?: homeResponse.imageCdn,
                     appNavController = appNavController,
-                    onFirstCardRequester = onFirstCardRequester,
+                    firstCardFocusRequester = if (index == 0) firstCardFocusRequester else null,
+                    onDelete = { deleteId ->
+                        val isWatchlist = row.cate.startsWith("Watchlist", ignoreCase = true) ||
+                                row.cate.contains("Watchlist", ignoreCase = true) ||
+                                row.cate.startsWith("My List", ignoreCase = true) ||
+                                row.cate.contains("My List", ignoreCase = true)
+                        if (isWatchlist) {
+                            viewModel.deleteWatchlistItem(deleteId)
+                        } else {
+                            viewModel.deleteContinueWatchingItem(deleteId)
+                        }
+                    }
                 )
             }
         }

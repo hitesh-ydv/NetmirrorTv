@@ -144,7 +144,11 @@ fun AppModalNavigationDrawer(
     // drawer container itself). Compose propagates `hasFocus` up to any
     // ancestor of a focused node, so this flips to false the moment focus
     // moves out to the carousel/content, and back to true on D-pad LEFT.
-    var drawerHasFocus by remember { mutableStateOf(true) }
+    val hasActiveContentFocus = TvFocusManager.lastFocusedHomeCardId != null ||
+            TvFocusManager.isCarouselLastFocused ||
+            TvFocusManager.lastFocusedSearchCardId != null
+
+    var drawerHasFocus by remember { mutableStateOf(!hasActiveContentFocus) }
 
     val drawerWidth by animateDpAsState(
         targetValue = if (drawerHasFocus) DRAWER_WIDTH_EXPANDED else DRAWER_WIDTH_COLLAPSED,
@@ -153,17 +157,20 @@ fun AppModalNavigationDrawer(
     )
 
     // FOCUS FIX:
-    // requestFocus() can silently fail on the very first frame if the
-    // target composable hasn't finished laying out yet — the old
-    // single-shot runCatching left the drawer with nothing focused when
-    // that happened. Retry with backoff instead of a single best-effort try.
-    LaunchedEffect(selectedItemIndex) {
-        TvFocusManager.selectedDrawerRequester = focusRequesters[selectedItemIndex]
-        repeat(5) { attempt ->
-            val focused = runCatching { focusRequesters[selectedItemIndex].requestFocus() }
-                .getOrDefault(false)
-            if (focused) return@LaunchedEffect
-            delay(50L * (attempt + 1))
+    // Only request focus into the drawer if the content area doesn't have an active/saved target.
+    LaunchedEffect(selectedItemIndex, focusRequesters) {
+        TvFocusManager.drawerRequesters = focusRequesters
+        TvFocusManager.selectedDrawerRequester = focusRequesters.getOrNull(selectedItemIndex)
+        val hasSavedContentFocus = TvFocusManager.lastFocusedHomeCardId != null ||
+                TvFocusManager.isCarouselLastFocused ||
+                TvFocusManager.lastFocusedSearchCardId != null
+        if (!hasSavedContentFocus) {
+            repeat(5) { attempt ->
+                val focused = runCatching { focusRequesters[selectedItemIndex].requestFocus() }
+                    .getOrDefault(false)
+                if (focused) return@LaunchedEffect
+                delay(50L * (attempt + 1))
+            }
         }
     }
 
@@ -204,9 +211,7 @@ fun AppModalNavigationDrawer(
                         selected = selectedItemIndex == originalIndex,
                         showLabel = drawerHasFocus,
                         onClick = {
-                            if (selectedItemIndex != originalIndex) {
-                                onItemSelected(originalIndex)
-                            }
+                            onItemSelected(originalIndex)
                         },
                         modifier = Modifier
                             .fillMaxWidth()

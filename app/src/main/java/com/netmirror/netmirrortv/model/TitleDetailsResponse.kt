@@ -35,6 +35,7 @@ data class TitleDetailsResponse(
     val nextPage: Int?,
     val nextPageSeason: String?,
     val last_ep: String?,
+    val resume_title: String?,
     val suggest: List<Suggest>?,
     val error: String?
 ) {

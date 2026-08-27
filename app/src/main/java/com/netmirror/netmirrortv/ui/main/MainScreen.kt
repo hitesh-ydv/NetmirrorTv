@@ -53,6 +53,10 @@ fun MainScreen(
                 // IMPORTANT
                 selectedIndex = index
                 TvFocusManager.lastFocusedContentRequester = null
+                TvFocusManager.lastFocusedHomeCardId = null
+                TvFocusManager.lastFocusedHomeRowPosition = null
+                TvFocusManager.isCarouselLastFocused = false
+                TvFocusManager.lastFocusedSearchCardId = null
 
                 when (index) {
 
@@ -160,7 +164,7 @@ fun MainScreen(
             AppToast(
                 title = "Network Error",
                 message = "Main Page Loading Fail, Retry after some times.",
-                durationMs = 6000L,
+                durationMs = 10000L,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 40.dp)

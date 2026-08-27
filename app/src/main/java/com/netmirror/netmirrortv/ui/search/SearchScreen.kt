@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -30,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,42 +87,38 @@ fun SearchScreen(
     val searchResult by viewModel.searchResult.collectAsState()
     val error by viewModel.error.collectAsState()
 
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
+    var lastSearchedQuery by rememberSaveable { mutableStateOf<String?>(null) }
     val searchFieldFocusRequester = remember { FocusRequester() }
+    val rowState = rememberLazyListState()
 
     TvFocusManager.currentScreenContentRequester = searchFieldFocusRequester
 
     val results = searchResult?.searchResult.orEmpty()
     val cardFocusRequesters = remember(results) { results.map { FocusRequester() } }
 
-    // Restore focus to clicked search card by ID when returning from details screen
-    LaunchedEffect(results) {
-        val lastCardId = TvFocusManager.lastFocusedSearchCardId
-        if (!lastCardId.isNullOrEmpty() && results.isNotEmpty()) {
-            val targetIndex = results.indexOfFirst { it.id == lastCardId }
-            if (targetIndex != -1 && targetIndex < cardFocusRequesters.size) {
-                val requester = cardFocusRequesters[targetIndex]
-                TvFocusManager.lastFocusedContentRequester = requester
-                repeat(5) { attempt ->
-                    val focused = runCatching { requester.requestFocus() }.getOrDefault(false)
-                    if (focused) return@LaunchedEffect
-                    delay(50L * (attempt + 1))
-                }
-            } else {
-                searchFieldFocusRequester.requestFocus()
+    // Initial focus on search field only when there is no saved focused card
+    LaunchedEffect(Unit) {
+        if (TvFocusManager.lastFocusedSearchCardId == null) {
+            repeat(5) { attempt ->
+                val focused = runCatching { searchFieldFocusRequester.requestFocus() }.getOrDefault(false)
+                if (focused) return@LaunchedEffect
+                delay(50L * (attempt + 1))
             }
-        } else {
-            searchFieldFocusRequester.requestFocus()
         }
     }
 
-    // 5-second debouncing on text input. Blank queries trigger immediately.
+    // Debouncing on text input. Only trigger search if query actually changed or no results loaded yet.
     LaunchedEffect(query) {
-        if (query.isBlank()) {
-            viewModel.search("")
-        } else {
-            delay(3000L)
-            viewModel.search(query)
+        if (query != lastSearchedQuery || searchResult == null) {
+            if (query.isBlank()) {
+                lastSearchedQuery = ""
+                viewModel.search("")
+            } else {
+                delay(1000L)
+                lastSearchedQuery = query
+                viewModel.search(query)
+            }
         }
     }
 
@@ -211,6 +209,7 @@ fun SearchScreen(
                     val isPortraitRow = searchResult?.row.equals("v", ignoreCase = true)
 
                     LazyRow(
+                        state = rowState,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         contentPadding = PaddingValues(start = 7.dp, end = 10.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -224,10 +223,11 @@ fun SearchScreen(
                                 isFirstInRow = index == 0,
                                 focusRequester = cardRequester,
                                 onClick = {
-                                    if (cardRequester != null) {
-                                        TvFocusManager.lastFocusedContentRequester = cardRequester
-                                        TvFocusManager.lastFocusedSearchCardId = item.id
-                                    }
+                                    TvFocusManager.lastFocusedContentRequester = cardRequester
+                                    TvFocusManager.lastFocusedSearchCardId = item.id
+                                    TvFocusManager.lastFocusedHomeCardId = null
+                                    TvFocusManager.lastFocusedHomeRowPosition = null
+                                    TvFocusManager.isCarouselLastFocused = false
                                     onItemClick(item)
                                 }
                             )
@@ -241,7 +241,7 @@ fun SearchScreen(
             AppToast(
                 title = "Network Error",
                 message = "Search Page Loading Fail, Retry after some times.",
-                durationMs = 6000L,
+                durationMs = 10000L,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 40.dp)
@@ -323,6 +323,17 @@ private fun SearchResultCard(
     val context = LocalContext.current
     val density = LocalDensity.current
 
+    // Restore focus to this card if it was the last focused card when navigating back from DetailsScreen
+    LaunchedEffect(item.id) {
+        if (TvFocusManager.lastFocusedSearchCardId == item.id) {
+            repeat(5) { attempt ->
+                val focused = runCatching { cardFocusRequester.requestFocus() }.getOrDefault(false)
+                if (focused) return@LaunchedEffect
+                delay(50L * (attempt + 1))
+            }
+        }
+    }
+
     val cardWidth = if (isPortrait) 150.dp else 200.dp
     val aspectRatio = if (isPortrait) 2f / 3f else 16f / 9f
 
@@ -330,7 +341,14 @@ private fun SearchResultCard(
     val heightPx = (widthPx / aspectRatio).toInt()
 
     Card(
-        onClick = onClick,
+        onClick = {
+            TvFocusManager.lastFocusedContentRequester = cardFocusRequester
+            TvFocusManager.lastFocusedSearchCardId = item.id
+            TvFocusManager.lastFocusedHomeCardId = null
+            TvFocusManager.lastFocusedHomeRowPosition = null
+            TvFocusManager.isCarouselLastFocused = false
+            onClick()
+        },
         modifier = Modifier
             .width(cardWidth)
             .aspectRatio(aspectRatio)
@@ -338,6 +356,10 @@ private fun SearchResultCard(
             .onFocusChanged { focusState ->
                 if (focusState.isFocused) {
                     TvFocusManager.lastFocusedContentRequester = cardFocusRequester
+                    TvFocusManager.lastFocusedSearchCardId = item.id
+                    TvFocusManager.lastFocusedHomeCardId = null
+                    TvFocusManager.lastFocusedHomeRowPosition = null
+                    TvFocusManager.isCarouselLastFocused = false
                     onFocused()
                 }
             }
@@ -347,6 +369,7 @@ private fun SearchResultCard(
                     event.type == KeyEventType.KeyDown &&
                     event.key == Key.DirectionLeft
                 ) {
+                    TvFocusManager.lastFocusedSearchCardId = null
                     TvFocusManager.moveFocusToDrawer()
                     true
                 } else {

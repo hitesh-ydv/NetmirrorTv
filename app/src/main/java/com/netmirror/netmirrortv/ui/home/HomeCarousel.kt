@@ -72,6 +72,7 @@ import com.netmirror.netmirrortv.utils.TvFocusManager
 
 import androidx.navigation.NavHostController
 import com.netmirror.netmirrortv.navigation.Routes
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -109,8 +110,12 @@ fun HomeCarousel(
         val carouselState = rememberCarouselState(initialActiveItemIndex = 0)
 
         LaunchedEffect(transitionKey) {
-            if (transitionKey > 0) {
-                TvFocusManager.carousel.requestFocus()
+            if (transitionKey > 0 || TvFocusManager.isCarouselLastFocused) {
+                repeat(5) { attempt ->
+                    val focused = TvFocusManager.requestFocus(TvFocusManager.carousel)
+                    if (focused) return@LaunchedEffect
+                    delay(50L * (attempt + 1))
+                }
             }
         }
 
@@ -136,6 +141,10 @@ fun HomeCarousel(
                         isCarouselFocused = it.isFocused || it.hasFocus
                         if (it.isFocused || it.hasFocus) {
                             TvFocusManager.lastFocusedContentRequester = TvFocusManager.carousel
+                            TvFocusManager.isCarouselLastFocused = true
+                            TvFocusManager.lastFocusedHomeCardId = null
+                            TvFocusManager.lastFocusedHomeRowPosition = null
+                            TvFocusManager.lastFocusedSearchCardId = null
                         }
                     }
                     .onPreviewKeyEvent { event ->
@@ -145,12 +154,19 @@ fun HomeCarousel(
                                 val activeItem = slider.getOrNull(carouselState.activeItemIndex)
                                 if (activeItem != null) {
                                     TvFocusManager.lastFocusedContentRequester = TvFocusManager.carousel
+                                    TvFocusManager.isCarouselLastFocused = true
+                                    TvFocusManager.lastFocusedHomeCardId = null
+                                    TvFocusManager.lastFocusedHomeRowPosition = null
+                                    TvFocusManager.lastFocusedSearchCardId = null
                                     appNavController.navigate(Routes.details(activeItem.id))
                                 }
                                 true
                             }
                             event.type == KeyEventType.KeyDown &&
                                     event.key == Key.DirectionLeft -> {
+                                TvFocusManager.isCarouselLastFocused = false
+                                TvFocusManager.lastFocusedHomeCardId = null
+                                TvFocusManager.lastFocusedHomeRowPosition = null
                                 TvFocusManager.moveFocusToDrawer()
                                 true
                             }
@@ -162,7 +178,10 @@ fun HomeCarousel(
                             }
                             event.type == KeyEventType.KeyDown &&
                                     event.key == Key.DirectionDown -> {
-                                firstCardRequester?.requestFocus()
+                                TvFocusManager.isCarouselLastFocused = false
+                                if (!TvFocusManager.requestFocus(firstCardRequester)) {
+                                    TvFocusManager.requestFocus(TvFocusManager.firstCardRequester)
+                                }
                                 true
                             }
                             else -> false

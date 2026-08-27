@@ -51,8 +51,8 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _state.value = DetailsUiState.Loading
 
-            val baseUrl = prefs.getBaseUrl()
-            val ott = prefs.getOtt()
+            val baseUrl = com.netmirror.netmirrortv.utils.AppSession.currentBaseUrl().ifBlank { prefs.getBaseUrl() }
+            val ott = com.netmirror.netmirrortv.utils.AppSession.currentOtt().ifBlank { prefs.getOtt() }
 
             if (baseUrl.isBlank()) {
                 _state.value = DetailsUiState.Error("Server not set up yet")
@@ -61,8 +61,18 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
 
             val api = ApiClient.create(baseUrl)
             val userToken = com.netmirror.netmirrortv.util.TokenStore.getUserToken(getApplication()) ?: ""
-            android.util.Log.d("UserToken", "DetailsViewModel.load -> Usertoken: '$userToken'")
-            runCatching { api.getDetails(id = id, ott = ott, userToken = userToken) }
+            val lastEp = com.netmirror.netmirrortv.utils.PlaybackProgressStore.getSeriesLastEpisode(getApplication(), id) ?: ""
+            val recentPlay = com.netmirror.netmirrortv.utils.RecentPlayStore.getRecentPlay(getApplication(), ott)
+            android.util.Log.d("DetailsViewModel", "DetailsViewModel.load -> id: '$id', ott: '$ott', Recentplay: '$recentPlay', Lastep: '$lastEp', Usertoken: '$userToken'")
+            runCatching {
+                api.getDetails(
+                    id = id,
+                    ott = ott,
+                    recentPlay = recentPlay,
+                    lastEp = lastEp,
+                    userToken = userToken
+                )
+            }
                 .onSuccess { response ->
                     _state.value = if (response.status == "ok") {
                         loadedId = id
@@ -77,11 +87,6 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /**
-     * Call once after a title finishes loading, to seed the currently
-     * selected season's episodes from the post.php payload without an
-     * extra network round trip.
-     */
     fun seedEpisodesFromDetails(data: TitleDetailsResponse) {
         val selectedSeason = data.season.orEmpty().firstOrNull { it.selected == true }
             ?: data.season.orEmpty().firstOrNull()
@@ -111,8 +116,8 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
         )
 
         viewModelScope.launch {
-            val baseUrl = prefs.getBaseUrl()
-            val ott = prefs.getOtt()
+            val baseUrl = com.netmirror.netmirrortv.utils.AppSession.currentBaseUrl().ifBlank { prefs.getBaseUrl() }
+            val ott = com.netmirror.netmirrortv.utils.AppSession.currentOtt().ifBlank { prefs.getOtt() }
 
             if (baseUrl.isBlank()) {
                 _episodesState.value = _episodesState.value.copy(
@@ -152,8 +157,8 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
         _episodesState.value = current.copy(isLoadingMore = true)
 
         viewModelScope.launch {
-            val baseUrl = prefs.getBaseUrl()
-            val ott = prefs.getOtt()
+            val baseUrl = com.netmirror.netmirrortv.utils.AppSession.currentBaseUrl().ifBlank { prefs.getBaseUrl() }
+            val ott = com.netmirror.netmirrortv.utils.AppSession.currentOtt().ifBlank { prefs.getOtt() }
 
             if (baseUrl.isBlank()) {
                 _episodesState.value = _episodesState.value.copy(
@@ -180,6 +185,56 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
                         error = e.message ?: "Failed to load more episodes"
                     )
                 }
+        }
+    }
+
+    fun toggleWatchlist(data: TitleDetailsResponse, isCurrentlyInWatchlist: Boolean) {
+        viewModelScope.launch {
+            val baseUrl = com.netmirror.netmirrortv.utils.AppSession.currentBaseUrl().ifBlank { prefs.getBaseUrl() }
+            val ott = com.netmirror.netmirrortv.utils.AppSession.currentOtt().ifBlank { prefs.getOtt() }.ifBlank { data.ott.orEmpty() }
+            if (baseUrl.isBlank()) return@launch
+
+            val storedWatchlist = com.netmirror.netmirrortv.utils.WatchlistStore.getWatchlist(getApplication(), ott)
+            val videoId = if (data.type == "t") "SE_${data.main_id}" else data.main_id
+
+            // Optimistically update local watchlist
+            if (isCurrentlyInWatchlist) {
+                com.netmirror.netmirrortv.utils.WatchlistStore.removeLocally(getApplication(), ott, videoId)
+            } else {
+                com.netmirror.netmirrortv.utils.WatchlistStore.addLocally(getApplication(), ott, videoId)
+            }
+
+            val api = ApiClient.create(baseUrl)
+            runCatching {
+                if (isCurrentlyInWatchlist) {
+                    // Item was in watchlist -> remove using Deleteid header
+                    api.deleteWatchlist(
+                        watchlist = storedWatchlist,
+                        ott = ott,
+                        deleteId = videoId
+                    )
+                } else {
+                    // Item was not in watchlist -> add using Videoid header
+                    api.toggleWatchlist(
+                        watchlist = storedWatchlist,
+                        ott = ott,
+                        videoId = videoId
+                    )
+                }
+            }.onSuccess { response ->
+                if (response.isSuccessful) {
+                    val body = response.body()
+                    android.util.Log.d("DetailsViewModel", "toggleWatchlist (deleted=$isCurrentlyInWatchlist) API response: key=${body?.key}, value=${body?.value}")
+                    if (body != null) {
+                        val key = body.key?.takeIf { it.isNotBlank() } ?: if (ott.isNotBlank()) "${ott}_watchlist" else "watchlist"
+                        com.netmirror.netmirrortv.utils.WatchlistStore.saveWatchlist(getApplication(), key, body.value.orEmpty())
+                    }
+                } else {
+                    android.util.Log.w("DetailsViewModel", "toggleWatchlist failed with code ${response.code()}")
+                }
+            }.onFailure { err ->
+                android.util.Log.e("DetailsViewModel", "toggleWatchlist request failed: ${err.message}", err)
+            }
         }
     }
 }

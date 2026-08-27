@@ -24,7 +24,7 @@ object Routes {
     const val OTT = "ott"
 
     const val DETAILS = "details/{id}"
-    const val PLAYER = "player/{id}"
+    const val PLAYER = "player/{id}?mainId={mainId}&type={type}"
 
     // apiUrl is the working mirror base URL resolved by the splash server
     // check — URL-encoded going in via otp(), decoded back out in
@@ -32,7 +32,16 @@ object Routes {
     const val OTP = "otp/{apiUrl}"
 
     fun details(id: String) = "details/$id"
-    fun player(id: String) = "player/$id"
+    fun player(id: String, mainId: String = "", type: String = ""): String {
+        val queryParams = mutableListOf<String>()
+        if (mainId.isNotBlank()) queryParams.add("mainId=${Uri.encode(mainId)}")
+        if (type.isNotBlank()) queryParams.add("type=${Uri.encode(type)}")
+        return if (queryParams.isNotEmpty()) {
+            "player/$id?${queryParams.joinToString("&")}"
+        } else {
+            "player/$id"
+        }
+    }
     fun otp(apiUrl: String) = "otp/${Uri.encode(apiUrl)}"
 }
 
@@ -84,15 +93,21 @@ fun AppNavigation(
             arguments = listOf(
                 navArgument("id") {
                     type = NavType.StringType
+                },
+                navArgument("mainId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument("type") {
+                    type = NavType.StringType
+                    defaultValue = ""
                 }
             )
         ) { backStackEntry ->
-            // For testing purposes, we ignore the passed id and use fixed test data.
-            // In production, you would fetch the stream details using the id.
             val id = backStackEntry.arguments?.getString("id") ?: ""
-
-            PlayerScreen(
-            )
+            val mainId = backStackEntry.arguments?.getString("mainId") ?: ""
+            val type = backStackEntry.arguments?.getString("type") ?: ""
+            PlayerScreen(id = id, mainId = mainId, type = type)
         }
     }
 }

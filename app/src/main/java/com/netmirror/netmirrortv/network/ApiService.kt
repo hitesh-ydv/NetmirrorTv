@@ -3,6 +3,8 @@ package com.netmirror.netmirrortv.network
 import com.netmirror.netmirrortv.model.EpisodesPageResponse
 import com.netmirror.netmirrortv.model.NavbarResponse
 import com.netmirror.netmirrortv.model.OtpResponse
+import com.netmirror.netmirrortv.model.PlayerResponse
+import com.netmirror.netmirrortv.model.RecentPlayResponse
 import com.netmirror.netmirrortv.model.SearchResponse
 import com.netmirror.netmirrortv.model.TokenResponse
 import com.netmirror.netmirrortv.ui.home.HomeResponse
@@ -59,14 +61,26 @@ interface ApiService {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
     ): NavbarResponse
 
+    @Headers(
+        "Cache-Control: no-cache, no-store, must-revalidate",
+        "Pragma: no-cache",
+        "Expires: 0"
+    )
     @GET("newtv/main.php")
     suspend fun getHome(
         @Header("Ott") ott: String,
 
-        @Header("Usertoken") userToken: String = "",
-
         @Header("Page")
         page: String = "all",
+
+        @Header("Recentplay")
+        recentPlay: String = "",
+
+        @Header("Watchlist")
+        watchlist: String = "",
+
+        @Header("Usertoken")
+        userToken: String = "",
 
         @Header("X-Requested-With")
         request: String = "NetmirrorNewTV v1.0",
@@ -105,6 +119,12 @@ interface ApiService {
         @Header("Ott")
         ott: String,
 
+        @Header("Recentplay")
+        recentPlay: String = "",
+
+        @Header("Lastep")
+        lastEp: String = "",
+
         @Header("Usertoken")
         userToken: String = "",
 
@@ -115,8 +135,7 @@ interface ApiService {
         userAgent: String =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0",
 
-
-        ): TitleDetailsResponse
+    ): TitleDetailsResponse
 
 
     @GET("newtv/episodes.php")
@@ -138,4 +157,99 @@ interface ApiService {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0",
 
         ): EpisodesPageResponse
+
+    @GET("newtv/player.php")
+    suspend fun getPlayer(
+        @Query("id")
+        id: String,
+
+        @Header("Ott")
+        ott: String,
+
+        @Header("Usertoken")
+        userToken: String = "",
+
+        @Header("X-Requested-With")
+        request: String = "NetmirrorNewTV v1.0",
+
+        @Header("User-Agent")
+        userAgent: String =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
+    ): PlayerResponse
+
+    @GET("newtv/recentplay.php")
+    suspend fun sendRecentPlay(
+        @Header("Recentplay")
+        recentPlay: String,
+
+        @Header("Ott")
+        ott: String,
+
+        @Header("Videoid")
+        videoId: String,
+
+        @Header("X-Requested-With")
+        request: String = "NetmirrorNewTV v1.0",
+
+        @Header("User-Agent")
+        userAgent: String =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
+    ): Response<RecentPlayResponse>
+
+    @GET("newtv/recentplay.php")
+    suspend fun deleteRecentPlay(
+        @Header("Recentplay")
+        recentPlay: String,
+
+        @Header("Ott")
+        ott: String,
+
+        @Header("Deleteid")
+        deleteId: String,
+
+        @Header("X-Requested-With")
+        request: String = "NetmirrorNewTV v1.0",
+
+        @Header("User-Agent")
+        userAgent: String =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
+    ): Response<RecentPlayResponse>
+
+    @GET("newtv/watchlist.php")
+    suspend fun toggleWatchlist(
+        @Header("Watchlist")
+        watchlist: String,
+
+        @Header("Ott")
+        ott: String,
+
+        @Header("Videoid")
+        videoId: String,
+
+        @Header("X-Requested-With")
+        request: String = "NetmirrorNewTV v1.0",
+
+        @Header("User-Agent")
+        userAgent: String =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
+    ): Response<RecentPlayResponse>
+
+    @GET("newtv/watchlist.php")
+    suspend fun deleteWatchlist(
+        @Header("Watchlist")
+        watchlist: String,
+
+        @Header("Ott")
+        ott: String,
+
+        @Header("Deleteid")
+        deleteId: String,
+
+        @Header("X-Requested-With")
+        request: String = "NetmirrorNewTV v1.0",
+
+        @Header("User-Agent")
+        userAgent: String =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
+    ): Response<RecentPlayResponse>
 }

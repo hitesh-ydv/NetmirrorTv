@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -79,10 +80,17 @@ fun OtpScreen(
 
     val uiState by viewModel.uiState.collectAsState()
     val focusRequester = remember { FocusRequester() }
+    val buttonFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var showExitDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        // Ensure no keypad opens when the OTP page is shown
+        keyboardController?.hide()
+        try {
+            buttonFocusRequester.requestFocus()
+        } catch (_: Exception) {}
+
         viewModel.events.collect { event ->
             when (event) {
                 OtpEvent.NavigateHome -> {
@@ -122,8 +130,8 @@ fun OtpScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyUp &&
+            .onPreviewKeyEvent { keyEvent ->
+                if (!showExitDialog && keyEvent.type == KeyEventType.KeyUp &&
                     (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                      keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER ||
                      keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
@@ -191,6 +199,7 @@ fun OtpScreen(
                         isError = uiState.error.isNotEmpty(),
                         isSuccess = uiState.success,
                         focusRequester = focusRequester,
+                        buttonFocusRequester = buttonFocusRequester,
                         onOtpChanged = viewModel::onOtpChanged,
                         onOpenKeyboard = {
                             focusRequester.requestFocus()
@@ -224,6 +233,7 @@ private fun OtpInputContainer(
     isError: Boolean,
     isSuccess: Boolean,
     focusRequester: FocusRequester,
+    buttonFocusRequester: FocusRequester,
     onOtpChanged: (String) -> Unit,
     onOpenKeyboard: () -> Unit
 ) {
@@ -321,6 +331,7 @@ private fun OtpInputContainer(
     // TV Remote Action Button (Focusable button so DPAD users can click to open keyboard)
     Box(
         modifier = Modifier
+            .focusRequester(buttonFocusRequester)
             .clip(RoundedCornerShape(30.dp))
             .background(btnBgColor)
             .border(if (isBtnFocused) 2.dp else 1.dp, btnBorderColor, RoundedCornerShape(30.dp))
