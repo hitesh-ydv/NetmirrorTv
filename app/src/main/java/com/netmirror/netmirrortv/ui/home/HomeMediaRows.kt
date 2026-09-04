@@ -16,12 +16,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import android.os.SystemClock
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -34,9 +44,11 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
@@ -60,6 +72,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
@@ -84,9 +97,35 @@ import kotlinx.coroutines.delay
 private val RowCardShape = RoundedCornerShape(5)
 private val PosterPlaceholder = Regex("-{3,}")
 private const val CardFocusedScale = 1.04f
-private val CardBorderColor = Color.White
+private val CardBorderColor = Color(0xFFE50914)
 private val CardFocusedContainerColor = Color(0xFF303030)
 private val CardContainerColor = Color(0xFF202020)
+
+internal const val LandscapeFullCardsCount = 5
+internal const val PortraitFullCardsCount = 6
+internal const val CardPeekFraction = 0.05f // 25% of the next card is "little visible" (peeking)
+internal val RowStartPadding = 7.dp
+internal val RowEndPadding = 24.dp
+internal val CardSpacing = 12.dp
+
+/**
+ * Calculates the width of a card such that:
+ * - For landscape: 5 full cards + 6th card little visible (peeking)
+ * - For portrait: 6 full cards + 7th card little visible (peeking)
+ * dynamically based on device measurements.
+ */
+internal fun calculateCardWidth(availableWidth: Dp, isPortrait: Boolean = true): Dp {
+    val fullCardsCount = if (isPortrait) PortraitFullCardsCount else LandscapeFullCardsCount
+    val effectiveCount = fullCardsCount + CardPeekFraction
+    val totalSpacing = (CardSpacing * fullCardsCount) + RowStartPadding
+    val computedWidth = (availableWidth - totalSpacing) / effectiveCount
+    return computedWidth.coerceAtLeast(80.dp)
+}
+
+internal fun calculateCardWidthForScreen(screenWidth: Dp, isPortrait: Boolean = true): Dp {
+    val availableWidth = screenWidth - 100.dp // 100.dp start padding for the navigation drawer
+    return calculateCardWidth(availableWidth, isPortrait)
+}
 
 internal val PortraitCardWidth = 150.dp
 internal val LandscapeCardWidth = 200.dp
@@ -101,7 +140,17 @@ internal const val LandscapeAspectRatio = 16f / 9f
 internal fun resolveCardImageUrl(template: String?, id: String): String =
     template?.replace(PosterPlaceholder, id).orEmpty()
 
-@OptIn(ExperimentalComposeUiApi::class)
+// Centers the focused card in the viewport (horizontally in LazyRow and vertically in LazyColumn)
+@OptIn(ExperimentalFoundationApi::class)
+internal object CenterBringIntoViewSpec : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+        val itemCenter = offset + size / 2f
+        val containerCenter = containerSize / 2f
+        return itemCenter - containerCenter
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun HomeMediaRow(
     row: HomePost,
@@ -109,10 +158,12 @@ internal fun HomeMediaRow(
     verticalImageTemplate: String?,
     rowPosition: Int?, // 0‑based index of this row in the LazyColumn
     hasCarousel: Boolean = false,
+    imgReferer: String? = null,
     appNavController: NavHostController,
     firstCardFocusRequester: FocusRequester? = null,
     onFirstCardRequester: ((FocusRequester) -> Unit)? = null, // callback for the first card's requester
     onDelete: ((String) -> Unit)? = null,
+    onDeleteLastCard: ((rowPosition: Int) -> Unit)? = null,
 ) {
     val ids = remember(row.ids) {
         row.ids.split(',').map(String::trim).filter(String::isNotEmpty)
@@ -122,9 +173,9 @@ internal fun HomeMediaRow(
     val isPortraitRow = row.row.equals("v", ignoreCase = true)
     val imageTemplate = if (isPortraitRow) verticalImageTemplate else horizontalImageTemplate
 
-    val cardFocusRequesters = remember(ids, firstCardFocusRequester, rowPosition) {
+    val cardFocusRequesters = remember(ids, firstCardFocusRequester) {
         ids.mapIndexed { index, _ ->
-            if (index == 0 && rowPosition == 0 && firstCardFocusRequester != null) {
+            if (index == 0 && firstCardFocusRequester != null) {
                 firstCardFocusRequester
             } else {
                 FocusRequester()
@@ -136,20 +187,41 @@ internal fun HomeMediaRow(
     val isTop10Row = row.cate.contains("top 10", ignoreCase = true)
     val isContinueWatchingRow = row.cate.startsWith("Continue Watching", ignoreCase = true) || row.cate.contains("Continue Watching", ignoreCase = true)
 
-    // If this is the first row (rowPosition == 0), report the first card's requester
-    LaunchedEffect(rowPosition, cardFocusRequesters) {
-        if (rowPosition == 0 && cardFocusRequesters.isNotEmpty()) {
+    // If this row has the first card focus requester, report it
+    LaunchedEffect(cardFocusRequesters, onFirstCardRequester) {
+        if (firstCardFocusRequester != null && cardFocusRequesters.isNotEmpty()) {
             onFirstCardRequester?.invoke(cardFocusRequesters.first())
+        }
+    }
+
+    LaunchedEffect(rowPosition, cardFocusRequesters) {
+        if (rowPosition != null && cardFocusRequesters.isNotEmpty()) {
+            TvFocusManager.rowFocusRequesters[rowPosition] = cardFocusRequesters.first()
+        }
+    }
+
+    var pendingFocusTargetId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(ids, pendingFocusTargetId) {
+        val targetId = pendingFocusTargetId ?: return@LaunchedEffect
+        val targetIndex = ids.indexOf(targetId)
+        if (targetIndex != -1) {
+            repeat(10) { attempt ->
+                val requester = cardFocusRequesters.getOrNull(targetIndex)
+                if (requester != null && TvFocusManager.requestFocus(requester)) {
+                    pendingFocusTargetId = null
+                    return@LaunchedEffect
+                }
+                delay(25L * (attempt + 1))
+            }
         }
     }
 
     val rowState = rememberLazyListState()
 
     val density = LocalDensity.current
-    val cardWidth = if (isPortraitRow) PortraitCardWidth else LandscapeCardWidth
-    val aspectRatioValue = if (isPortraitRow) PortraitAspectRatio else LandscapeAspectRatio
-    val widthPx = remember(cardWidth, density) { with(density) { cardWidth.toPx() }.toInt() }
-    val heightPx = remember(widthPx, aspectRatioValue) { (widthPx / aspectRatioValue).toInt() }
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val fallbackAvailableWidth = screenWidth - 100.dp
 
     val cardBorder = CardDefaults.border(
         focusedBorder = Border(
@@ -168,64 +240,114 @@ internal fun HomeMediaRow(
     val cardScale = remember { CardDefaults.scale(focusedScale = CardFocusedScale) }
     val cardShape = remember { CardDefaults.shape(shape = RowCardShape) }
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 16.dp, bottom = 12.dp)
     ) {
-        Text(
-            text = row.cate,
-            color = Color.White,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(16.dp))
+        val availableWidth = if (maxWidth > 0.dp && maxWidth != Dp.Infinity) {
+            maxWidth
+        } else {
+            fallbackAvailableWidth
+        }
+        val cardWidth = remember(availableWidth, isPortraitRow) { calculateCardWidth(availableWidth, isPortraitRow) }
+        val aspectRatioValue = if (isPortraitRow) PortraitAspectRatio else LandscapeAspectRatio
+        val widthPx = remember(cardWidth, density) { with(density) { cardWidth.toPx() }.toInt() }
+        val heightPx = remember(widthPx, aspectRatioValue) { (widthPx / aspectRatioValue).toInt() }
 
-        LazyRow(
-            state = rowState,
-            contentPadding = PaddingValues(start = 7.dp, end = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            itemsIndexed(
-                items = ids,
-                key = { index, id -> "${id}_$index" },
-                contentType = { _, _ -> if (isPortraitRow) "portrait" else "landscape" },
-            ) { index, id ->
-                val onFocused: () -> Unit = remember(index, cardFocusRequesters, id, rowPosition) {
-                    {
-                        lastFocusedIndex = index
-                        TvFocusManager.lastFocusedContentRequester = cardFocusRequesters[index]
-                        TvFocusManager.lastFocusedHomeCardId = id
-                        TvFocusManager.lastFocusedHomeRowPosition = rowPosition
-                        TvFocusManager.isCarouselLastFocused = false
-                        TvFocusManager.lastFocusedSearchCardId = null
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = row.cate,
+                color = Color.White,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
+                LazyRow(
+                    state = rowState,
+                    contentPadding = PaddingValues(start = RowStartPadding, end = RowEndPadding),
+                    horizontalArrangement = Arrangement.spacedBy(CardSpacing)
+                ) {
+                    itemsIndexed(
+                        items = ids,
+                        key = { index, id -> "${id}_$index" },
+                        contentType = { _, _ -> if (isPortraitRow) "portrait" else "landscape" },
+                    ) { index, id ->
+                        val onFocused: () -> Unit = remember(index, cardFocusRequesters, id, rowPosition) {
+                            {
+                                lastFocusedIndex = index
+                                TvFocusManager.lastFocusedContentRequester = cardFocusRequesters[index]
+                                TvFocusManager.lastFocusedHomeCardId = id
+                                TvFocusManager.lastFocusedHomeRowPosition = rowPosition
+                                TvFocusManager.isCarouselLastFocused = false
+                                TvFocusManager.lastFocusedSearchCardId = null
+                                if (rowPosition != null) {
+                                    TvFocusManager.rowFocusRequesters[rowPosition] = cardFocusRequesters[index]
+                                }
+                            }
+                        }
+                        val handleDeleteCard: () -> Unit = remember(index, ids, cardFocusRequesters, rowPosition, hasCarousel, onDelete, onDeleteLastCard, id) {
+                            {
+                                if (index + 1 < ids.size) {
+                                    // 1. Right side has card -> focus it
+                                    val targetId = ids[index + 1]
+                                    pendingFocusTargetId = targetId
+                                    onDelete?.invoke(id)
+                                } else if (index > 0) {
+                                    // 2. Else in left side -> focus it
+                                    val targetId = ids[index - 1]
+                                    pendingFocusTargetId = targetId
+                                    onDelete?.invoke(id)
+                                } else {
+                                    // 3. Those card are last -> focus on above row card
+                                    if (onDeleteLastCard != null) {
+                                        onDeleteLastCard.invoke(rowPosition ?: 0)
+                                    } else {
+                                        if (rowPosition != null && rowPosition > 0) {
+                                            val aboveRequester = TvFocusManager.rowFocusRequesters[rowPosition - 1]
+                                            if (!TvFocusManager.requestFocus(aboveRequester)) {
+                                                if (hasCarousel) {
+                                                    TvFocusManager.requestFocus(TvFocusManager.carousel)
+                                                }
+                                            }
+                                        } else if (hasCarousel) {
+                                            TvFocusManager.requestFocus(TvFocusManager.carousel)
+                                        }
+                                    }
+                                    onDelete?.invoke(id)
+                                }
+                            }
+                        }
+                        HomeMediaCard(
+                            id = id,
+                            imageUrl = resolveCardImageUrl(imageTemplate, id),
+                            imgReferer = imgReferer,
+                            isPortrait = isPortraitRow,
+                            isTop10 = isTop10Row,
+                            isContinueWatching = isContinueWatchingRow,
+                            rank = index + 1,
+                            isFirstInRow = index == 0,
+                            isFirstRow = (rowPosition == 0),
+                            rowPosition = rowPosition,
+                            hasCarousel = hasCarousel,
+                            cardWidth = cardWidth,
+                            aspectRatio = aspectRatioValue,
+                            widthPx = widthPx,
+                            heightPx = heightPx,
+                            border = cardBorder,
+                            colors = cardColors,
+                            scale = cardScale,
+                            shape = cardShape,
+                            focusRequester = cardFocusRequesters[index],
+                            nextCardFocusRequester = if (index + 1 < cardFocusRequesters.size) cardFocusRequesters[index + 1] else null,
+                            onFocused = onFocused,
+                            onDelete = handleDeleteCard,
+                            appNavController = appNavController
+                        )
                     }
                 }
-                HomeMediaCard(
-                    id = id,
-                    imageUrl = resolveCardImageUrl(imageTemplate, id),
-                    isPortrait = isPortraitRow,
-                    isTop10 = isTop10Row,
-                    isContinueWatching = isContinueWatchingRow,
-                    rank = index + 1,
-                    isFirstInRow = index == 0,
-                    isFirstRow = (rowPosition == 0),
-                    rowPosition = rowPosition,
-                    hasCarousel = hasCarousel,
-                    cardWidth = cardWidth,
-                    aspectRatio = aspectRatioValue,
-                    widthPx = widthPx,
-                    heightPx = heightPx,
-                    border = cardBorder,
-                    colors = cardColors,
-                    scale = cardScale,
-                    shape = cardShape,
-                    focusRequester = cardFocusRequesters[index],
-                    nextCardFocusRequester = if (index + 1 < cardFocusRequesters.size) cardFocusRequesters[index + 1] else null,
-                    onFocused = onFocused,
-                    onDelete = { onDelete?.invoke(id) },
-                    appNavController = appNavController
-                )
             }
         }
     }
@@ -235,6 +357,7 @@ internal fun HomeMediaRow(
 private fun HomeMediaCard(
     id: String,
     imageUrl: String,
+    imgReferer: String? = null,
     isPortrait: Boolean,
     isTop10: Boolean,
     isContinueWatching: Boolean = false,
@@ -260,14 +383,32 @@ private fun HomeMediaCard(
     val context = LocalContext.current
 
     // Restore focus to this card if it was the last focused card when navigating back from DetailsScreen
-    LaunchedEffect(id, rowPosition) {
+    LaunchedEffect(id, rowPosition, focusRequester) {
         if (TvFocusManager.lastFocusedHomeCardId == id &&
             (TvFocusManager.lastFocusedHomeRowPosition == null || TvFocusManager.lastFocusedHomeRowPosition == rowPosition)
         ) {
-            repeat(5) { attempt ->
+            TvFocusManager.lastFocusedContentRequester = focusRequester
+            repeat(8) { attempt ->
                 val focused = runCatching { focusRequester.requestFocus() }.getOrDefault(false)
                 if (focused) return@LaunchedEffect
-                delay(50L * (attempt + 1))
+                delay(40L * (attempt + 1))
+            }
+        }
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME, lifecycleOwner) {
+        if (TvFocusManager.lastFocusedHomeCardId == id &&
+            (TvFocusManager.lastFocusedHomeRowPosition == null || TvFocusManager.lastFocusedHomeRowPosition == rowPosition)
+        ) {
+            TvFocusManager.lastFocusedContentRequester = focusRequester
+            coroutineScope.launch {
+                repeat(10) { attempt ->
+                    val focused = runCatching { focusRequester.requestFocus() }.getOrDefault(false)
+                    if (focused) return@launch
+                    delay(30L * (attempt + 1))
+                }
             }
         }
     }
@@ -297,6 +438,8 @@ private fun HomeMediaCard(
         else -> R.drawable.top_10
     }
 
+    var lastFocusGainTime by remember { mutableLongStateOf(0L) }
+
     Box(
         modifier = Modifier
             .width(cardWidth)
@@ -305,6 +448,10 @@ private fun HomeMediaCard(
 
         Card(
             onClick = {
+                // Ignore accidental clicks if this card gained focus within the last 400ms (e.g. from deleting adjacent card)
+                if (SystemClock.uptimeMillis() - lastFocusGainTime < 400L) {
+                    return@Card
+                }
                 Log.d("HomeMediaRows", "Clicked card ID: $id")
                 onFocused()
                 appNavController.navigate(Routes.details(id))
@@ -313,9 +460,19 @@ private fun HomeMediaCard(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .onFocusChanged { focusState ->
-                    if (focusState.isFocused) onFocused()
+                    if (focusState.isFocused) {
+                        lastFocusGainTime = SystemClock.uptimeMillis()
+                        onFocused()
+                    }
                 }
                 .onPreviewKeyEvent { event ->
+                    // Consume stray KeyUp events for Center / Enter if card gained focus very recently
+                    if (event.type == KeyEventType.KeyUp &&
+                        (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) &&
+                        SystemClock.uptimeMillis() - lastFocusGainTime < 400L
+                    ) {
+                        return@onPreviewKeyEvent true
+                    }
                     if (event.type == KeyEventType.KeyDown) {
                         when {
                             isContinueWatching && event.key == Key.DirectionRight -> {
@@ -327,9 +484,6 @@ private fun HomeMediaCard(
                                 true
                             }
                             isFirstInRow && event.key == Key.DirectionLeft -> {
-                                TvFocusManager.isCarouselLastFocused = false
-                                TvFocusManager.lastFocusedHomeCardId = null
-                                TvFocusManager.lastFocusedHomeRowPosition = null
                                 TvFocusManager.moveFocusToDrawer()
                                 true
                             }
@@ -352,12 +506,18 @@ private fun HomeMediaCard(
             Box {
 
                 AsyncImage(
-                    model = remember(imageUrl, widthPx, heightPx) {
+                    model = remember(imageUrl, widthPx, heightPx, imgReferer) {
                         ImageRequest.Builder(context)
                             .data(imageUrl)
                             .size(Size(widthPx, heightPx))
                             .precision(Precision.INEXACT) // lets Coil reuse similarly-sized cached bitmaps instead of always decoding exact-fit
                             .allowRgb565(true) // ~half the memory + decode time of ARGB_8888; posters don't need alpha/full color depth
+                            .apply {
+                                if (!imgReferer.isNullOrBlank()) {
+                                    setHeader("Referer", imgReferer)
+                                }
+                                setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                            }
                             .crossfade(false)
                             .build()
                     },
@@ -452,33 +612,42 @@ private fun HomeMediaCard(
                         shape = CircleShape
                     )
                     .onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown) {
-                            when (event.key) {
-                                Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                                    onDelete?.invoke()
-                                    true
-                                }
-                                Key.DirectionLeft, Key.Back -> {
-                                    focusRequester.requestFocus()
-                                    true
-                                }
-                                Key.DirectionRight -> {
-                                    if (nextCardFocusRequester != null) {
-                                        nextCardFocusRequester.requestFocus()
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                Key.DirectionDown -> {
-                                    focusRequester.requestFocus()
-                                    true
-                                }
-                                else -> false
+                        when {
+                            event.type == KeyEventType.KeyDown &&
+                                (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                                true
                             }
-                        } else false
+                            event.type == KeyEventType.KeyUp &&
+                                (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                                onDelete?.invoke()
+                                true
+                            }
+                            event.type == KeyEventType.KeyDown &&
+                                (event.key == Key.DirectionLeft || event.key == Key.Back) -> {
+                                focusRequester.requestFocus()
+                                true
+                            }
+                            event.type == KeyEventType.KeyDown &&
+                                event.key == Key.DirectionRight -> {
+                                if (nextCardFocusRequester != null) {
+                                    nextCardFocusRequester.requestFocus()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            event.type == KeyEventType.KeyDown &&
+                                event.key == Key.DirectionDown -> {
+                                focusRequester.requestFocus()
+                                true
+                            }
+                            else -> false
+                        }
                     }
-                    .clickable { onDelete?.invoke() }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onDelete?.invoke() }
                     .zIndex(4f),
                 contentAlignment = Alignment.Center
             ) {
@@ -498,8 +667,8 @@ private fun HomeMediaCard(
                 contentDescription = null,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .offset(x = (20).dp, y = (-20).dp)
-                    .height(50.dp)
+                    .offset(x = (14).dp, y = (-14).dp)
+                    .height(44.dp)
                     .zIndex(2f)
             )
         }

@@ -79,15 +79,20 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.util.TypedValue
-import java.util.Locale
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import android.util.Log
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.graphics.graphicsLayer
 import java.io.File
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.CacheDataSource
@@ -105,6 +110,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -115,19 +121,25 @@ import com.netmirror.netmirrortv.util.TokenStore
 import com.netmirror.netmirrortv.utils.PlaybackProgressStore
 import com.netmirror.netmirrortv.utils.PlayerPreferences
 import kotlinx.coroutines.delay
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import androidx.compose.ui.zIndex
+import java.util.Locale
+
 
 @OptIn(UnstableApi::class)
 private object PlayerCacheManager {
-    private const val MAX_CACHE_SIZE: Long = 512 * 1024 * 1024 // 512MB LRU cache
+    private const val MAX_CACHE_SIZE: Long = 512 * 1024 * 1024 // 512MB LRU disk cache
     @Volatile
     private var simpleCache: SimpleCache? = null
 
     fun getCache(context: Context): SimpleCache {
+        val appContext = context.applicationContext
         return simpleCache ?: synchronized(this) {
             simpleCache ?: run {
-                val cacheDir = File(context.cacheDir, "media3_hls_cache")
+                val cacheDir = File(appContext.cacheDir, "media3_hls_cache")
                 val evictor = LeastRecentlyUsedCacheEvictor(MAX_CACHE_SIZE)
-                val databaseProvider = StandaloneDatabaseProvider(context.applicationContext)
+                val databaseProvider = StandaloneDatabaseProvider(appContext)
                 SimpleCache(cacheDir, evictor, databaseProvider).also {
                     simpleCache = it
                 }
@@ -137,7 +149,7 @@ private object PlayerCacheManager {
 }
 
 enum class MenuTab {
-    AUDIO, SUBTITLE, RESOLUTION, SPEED
+    AUDIO, SUBTITLE, RESOLUTION, SPEED, SUBTITLE_SETTINGS
 }
 
 enum class PlayerFocusArea {
@@ -151,7 +163,7 @@ data class TrackOption(
     val onSelect: () -> Unit
 )
 
-val GoldAccent = Color(0xFFFFD700)
+val AccentGreen = Color(0xFF46D369)
 
 @Composable
 fun PlayerScreen(
@@ -209,12 +221,18 @@ fun PlayerScreen(
             is PlayerUiState.Success -> {
                 val streamUrl = s.response.playUrl.orEmpty()
                 val title = s.response.displayTitle.orEmpty()
-                val referer = s.response.referer?.takeIf { it.isNotBlank() } ?: "https://net52.cc"
+                val mainTitle = s.response.title?.takeIf { it.isNotBlank() } ?: s.response.titleName.orEmpty()
+                val rawEp = s.response.ep.orEmpty()
+                val rawEpTitle = s.response.epTitle.orEmpty()
+                val referer = s.response.dynamicReferer ?: ""
 
                 if (streamUrl.isNotBlank()) {
                     PlayerContent(
                         streamUrl = streamUrl,
                         title = title,
+                        mainTitle = mainTitle,
+                        ep = rawEp,
+                        epTitle = rawEpTitle,
                         referer = referer,
                         id = id,
                         mainId = mainId,
@@ -241,6 +259,9 @@ fun PlayerScreen(
 private fun PlayerContent(
     streamUrl: String,
     title: String,
+    mainTitle: String = "",
+    ep: String = "",
+    epTitle: String = "",
     referer: String = "https://net52.cc",
     id: String = "",
     mainId: String = "",
@@ -249,6 +270,18 @@ private fun PlayerContent(
 ) {
     val context = LocalContext.current
     val onBackPressedDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+
+    val isMovie = epTitle.equals("MOVIE", ignoreCase = true) || type.equals("m", ignoreCase = true)
+    val displayEp = if (!isMovie && ep.isNotBlank()) ep.trim() else ""
+    val displayEpTitle = if (!isMovie && epTitle.isNotBlank()) epTitle.trim() else ""
+    val displayMainTitle = if (mainTitle.isNotBlank()) {
+        mainTitle.trim()
+    } else if (title.isNotBlank() && displayEpTitle.isBlank()) {
+        title.trim()
+    } else {
+        ""
+    }
+    val hasHeaderContent = displayMainTitle.isNotBlank() || displayEp.isNotBlank() || displayEpTitle.isNotBlank()
 
     val trackSelector = remember {
         DefaultTrackSelector(context).apply {
@@ -284,36 +317,25 @@ private fun PlayerContent(
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                20_000,
-                60_000,
-                2_500,
-                5_000
+                199_000,
+                200_000,
+                1_500,
+                3_000
             )
-            .setBackBuffer(15_000, true)
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBackBuffer(100_000, true)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
         val renderersFactory = DefaultRenderersFactory(context).apply {
             setEnableDecoderFallback(true)
-            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-            setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-                val defaultDecoders = MediaCodecSelector.DEFAULT.getDecoderInfos(
-                    mimeType,
-                    requiresSecureDecoder,
-                    requiresTunnelingDecoder
-                )
-                // Prioritize universal software decoders (c2.android / OMX.google) for 100% compatibility across all Android TV devices
-                defaultDecoders.sortedByDescending { codecInfo ->
-                    codecInfo.softwareOnly ||
-                    !codecInfo.hardwareAccelerated ||
-                    codecInfo.name.startsWith("c2.android.", ignoreCase = true) ||
-                    codecInfo.name.startsWith("OMX.google.", ignoreCase = true)
-                }
-            }
+            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            forceEnableMediaCodecAsynchronousQueueing()
+            setMediaCodecSelector(MediaCodecSelector.DEFAULT)
         }
 
         val hlsMediaSourceFactory = HlsMediaSource.Factory(cacheDataSourceFactory)
             .setAllowChunklessPreparation(true)
+            .setMetadataType(HlsMediaSource.METADATA_TYPE_ID3)
 
         val mediaItem = MediaItem.Builder()
             .setUri(streamUrl)
@@ -326,24 +348,29 @@ private fun PlayerContent(
             .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
+            .setSeekParameters(SeekParameters.DEFAULT)
             .build()
             .apply {
+                videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
                 addAnalyticsListener(object : AnalyticsListener {
                     override fun onDroppedVideoFrames(
                         eventTime: AnalyticsListener.EventTime,
                         droppedFrames: Int,
                         elapsedMs: Long
                     ) {
-                        if (droppedFrames > 15) {
-                            Log.w("PlayerScreen", "Dropped $droppedFrames frames in ${elapsedMs}ms")
-                        }
+                        Log.d(
+                            "PLAYERVIEW",
+                            "Dropped=$droppedFrames elapsed=$elapsedMs"
+                        )
                     }
 
-                    override fun onPlayerError(
+                    override fun onVideoDecoderInitialized(
                         eventTime: AnalyticsListener.EventTime,
-                        error: androidx.media3.common.PlaybackException
+                        decoderName: String,
+                        initializedTimestampMs: Long,
+                        initializationDurationMs: Long
                     ) {
-                        Log.e("PlayerScreen", "Player playback error: ${error.errorCodeName} (${error.errorCode})", error)
+                        Log.d("PLAYERVIEW", "Decoder=$decoderName")
                     }
                 })
                 setMediaSource(hlsMediaSource)
@@ -354,7 +381,12 @@ private fun PlayerContent(
 
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var isPlaying by remember { mutableStateOf(true) }
-    var isBuffering by remember { mutableStateOf(false) }
+    var isBuffering by remember {
+        mutableStateOf(
+            exoPlayer.playbackState == Player.STATE_BUFFERING ||
+            exoPlayer.playbackState == Player.STATE_IDLE
+        )
+    }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var bufferedPosition by remember { mutableLongStateOf(0L) }
@@ -367,6 +399,19 @@ private fun PlayerContent(
     var selectedAudioLabel by remember { mutableStateOf("Hindi") }
     var selectedSpeedLabel by remember { mutableStateOf("1.0x") }
     var initialPreferencesSet by remember { mutableStateOf(false) }
+
+    // Subtitle Custom Style State (Font Size, Text Color, Background Color, Opacity, Bottom Spacing)
+    val initialSubSize = remember { PlayerPreferences.getPreferredSubtitleSize(context) }
+    val initialSubColorName = remember { PlayerPreferences.getPreferredSubtitleColor(context) ?: "White" }
+    val initialSubBgColorName = remember { PlayerPreferences.getPreferredSubtitleBgColor(context) }
+    val initialSubBgOpacity = remember { PlayerPreferences.getPreferredSubtitleBgOpacity(context) }
+    val initialSubSpacing = remember { PlayerPreferences.getPreferredSubtitleSpacing(context) }
+
+    var selectedSubtitleFontSize by remember { mutableStateOf(initialSubSize) }
+    var selectedSubtitleColorName by remember { mutableStateOf(initialSubColorName) }
+    var selectedSubtitleBgColorName by remember { mutableStateOf(initialSubBgColorName) }
+    var selectedSubtitleBgOpacity by remember { mutableStateOf(initialSubBgOpacity) }
+    var selectedSubtitleBottomSpacing by remember { mutableStateOf(initialSubSpacing) }
 
     // Exit Toast Dialog State
     var showExitToast by remember { mutableStateOf(false) }
@@ -383,15 +428,62 @@ private fun PlayerContent(
     var fastSeekAccumulator by remember { mutableLongStateOf(0L) }
     var seekHoldStartTime by remember { mutableLongStateOf(0L) }
     var lastSeekDirection by remember { mutableStateOf(0) } // -1 for Left, 1 for Right
+    var seekEventTrigger by remember { mutableLongStateOf(0L) }
 
     // Auto-dismiss seek pop-up card 1.5 seconds after key release
-    LaunchedEffect(isFastSeeking) {
+    LaunchedEffect(isFastSeeking, seekEventTrigger) {
         if (isFastSeeking) {
             showSeekOverlay = true
         } else if (showSeekOverlay) {
             delay(1500L)
             showSeekOverlay = false
             fastSeekAccumulator = 0L
+            lastSeekDirection = 0
+        }
+    }
+
+    // Debounce safety fallback for remotes without KeyUp event
+    LaunchedEffect(fastSeekTargetPos, isFastSeeking) {
+        if (isFastSeeking) {
+            delay(800L)
+            if (isFastSeeking) {
+                isBuffering = true
+                exoPlayer.seekTo(fastSeekTargetPos)
+                currentPosition = fastSeekTargetPos
+                isFastSeeking = false
+                seekHoldStartTime = 0L
+            }
+        }
+    }
+
+    // Realtime Subtitle Style Update Effect
+    LaunchedEffect(
+        playerViewRef,
+        selectedSubtitleFontSize,
+        selectedSubtitleColorName,
+        selectedSubtitleBgColorName,
+        selectedSubtitleBgOpacity,
+        selectedSubtitleBottomSpacing
+    ) {
+        val colorInt = getSubtitleTextColor(selectedSubtitleColorName)
+        val bgColorInt = getSubtitleBgColor(selectedSubtitleBgColorName, selectedSubtitleBgOpacity)
+        val density = context.resources.displayMetrics.density
+        val bottomMarginPx = (density * selectedSubtitleBottomSpacing).toInt()
+
+        playerViewRef?.subtitleView?.apply {
+            setStyle(
+                CaptionStyleCompat(
+                    colorInt,
+                    bgColorInt,
+                    android.graphics.Color.TRANSPARENT,
+                    CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                    android.graphics.Color.BLACK,
+                    null
+                )
+            )
+            setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, selectedSubtitleFontSize)
+            setPadding(0, 0, 0, bottomMarginPx)
+            setBottomPaddingFraction(selectedSubtitleBottomSpacing / 600f)
         }
     }
 
@@ -401,6 +493,7 @@ private fun PlayerContent(
     val tabSubtitleFocusRequester = remember { FocusRequester() }
     val tabResolutionFocusRequester = remember { FocusRequester() }
     val tabSpeedFocusRequester = remember { FocusRequester() }
+    val tabSubtitleSettingsFocusRequester = remember { FocusRequester() }
     val contentFirstOptionFocusRequester = remember { FocusRequester() }
     val rootFocusRequester = remember { FocusRequester() }
 
@@ -475,6 +568,7 @@ private fun PlayerContent(
         // Ensure resume position is not at the very end of video (> duration - 5s)
         if (resumeAtMs < (exoPlayer.duration - 5000L).coerceAtLeast(0L)) {
             Log.d("PlayerScreen", "Resuming playback from stored position: ${resumeAtMs}ms (${formatTime(resumeAtMs)}) for ID: $id")
+            isBuffering = true
             exoPlayer.seekTo(resumeAtMs)
             exoPlayer.play()
         }
@@ -530,10 +624,16 @@ private fun PlayerContent(
     // Periodically update current video position and buffer status
     LaunchedEffect(isPlaying) {
         while (true) {
-            currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+            if (!isFastSeeking && !showSeekOverlay) {
+                currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+            }
             duration = exoPlayer.duration.coerceAtLeast(0L)
             bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L)
             isPlaying = exoPlayer.isPlaying
+
+            if (!isFastSeeking) {
+                isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING || exoPlayer.playbackState == Player.STATE_IDLE
+            }
 
             if (!metaLoaded && exoPlayer.duration > 0L) {
                 metaLoaded = true
@@ -568,7 +668,7 @@ private fun PlayerContent(
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                isBuffering = playbackState == Player.STATE_BUFFERING
+                isBuffering = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
                 duration = exoPlayer.duration.coerceAtLeast(0L)
                 if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
                     if (exoPlayer.duration > 0L) {
@@ -599,6 +699,8 @@ private fun PlayerContent(
             }
         }
         exoPlayer.addListener(listener)
+        isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING || exoPlayer.playbackState == Player.STATE_IDLE
+
         onDispose {
             // Save progress once when component unmounts
             if (thirtySecondTriggered && exoPlayer.currentPosition > 0L && exoPlayer.duration > 0L) {
@@ -609,6 +711,26 @@ private fun PlayerContent(
             }
             exoPlayer.removeListener(listener)
             exoPlayer.release()
+        }
+    }
+
+    // Pause player when app gets into background
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                exoPlayer.pause()
+                if (thirtySecondTriggered && exoPlayer.currentPosition > 0L && exoPlayer.duration > 0L) {
+                    val curSec = exoPlayer.currentPosition / 1000L
+                    val durSec = exoPlayer.duration / 1000L
+                    PlaybackProgressStore.saveProgress(context, id, curSec, durSec)
+                    Log.d("PlayerProgress", "Saved progress on background pause: ${curSec}s (progress_$id = $curSec:$durSec)")
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -673,6 +795,7 @@ private fun PlayerContent(
                                         MenuTab.SUBTITLE -> tabSubtitleFocusRequester
                                         MenuTab.RESOLUTION -> tabResolutionFocusRequester
                                         MenuTab.SPEED -> tabSpeedFocusRequester
+                                        MenuTab.SUBTITLE_SETTINGS -> tabSubtitleSettingsFocusRequester
                                     }
                                     runCatching { req.requestFocus() }
                                     return@onPreviewKeyEvent true
@@ -684,51 +807,69 @@ private fun PlayerContent(
                                 }
                             }
                         }
-                        Key.DirectionLeft -> {
+                        Key.DirectionLeft, Key.MediaRewind, Key.MediaStepBackward -> {
                             if (!controlsVisible || !isMenuVisible || activeFocusArea == PlayerFocusArea.PLAY_PAUSE) {
                                 controlsVisible = true
                                 activeFocusArea = PlayerFocusArea.PLAY_PAUSE
                                 runCatching { playPauseFocusRequester.requestFocus() }
-                                val maxDur = exoPlayer.duration.coerceAtLeast(0L)
+                                val playerDuration = exoPlayer.duration
+                                val maxDur = if (playerDuration > 0L) playerDuration else Long.MAX_VALUE
                                 val now = System.currentTimeMillis()
 
-                                // Reset acceleration timer if starting fresh seek or switching direction
+                                // Chain position from previous tap if overlay is still active in same direction:
+                                val isChainingPosition = (isFastSeeking || showSeekOverlay) && lastSeekDirection == -1
+                                val startPos = if (isChainingPosition) fastSeekTargetPos else exoPlayer.currentPosition
+
+                                // Only continue hold acceleration timer if physically holding (isFastSeeking == true)
                                 if (!isFastSeeking || lastSeekDirection != -1) {
                                     seekHoldStartTime = now
                                     lastSeekDirection = -1
                                 }
+                                if (!isChainingPosition) {
+                                    fastSeekAccumulator = 0L
+                                }
 
                                 val holdDuration = now - seekHoldStartTime
-                                val step = calculateSeekStep(holdDuration, maxDur)
+                                val step = calculateSeekStep(holdDuration, if (playerDuration > 0L) playerDuration else 0L)
 
-                                val startPos = if (isFastSeeking) fastSeekTargetPos else exoPlayer.currentPosition
                                 val newTarget = (startPos - step).coerceAtLeast(0L)
                                 isFastSeeking = true
+                                showSeekOverlay = true
+                                seekEventTrigger = now
                                 fastSeekTargetPos = newTarget
                                 fastSeekAccumulator -= step
                                 return@onPreviewKeyEvent true
                             }
                         }
-                        Key.DirectionRight -> {
+                        Key.DirectionRight, Key.MediaFastForward, Key.MediaStepForward -> {
                             if (!controlsVisible || !isMenuVisible || activeFocusArea == PlayerFocusArea.PLAY_PAUSE) {
                                 controlsVisible = true
                                 activeFocusArea = PlayerFocusArea.PLAY_PAUSE
                                 runCatching { playPauseFocusRequester.requestFocus() }
-                                val maxDur = exoPlayer.duration.coerceAtLeast(0L)
+                                val playerDuration = exoPlayer.duration
+                                val maxDur = if (playerDuration > 0L) playerDuration else Long.MAX_VALUE
                                 val now = System.currentTimeMillis()
 
-                                // Reset acceleration timer if starting fresh seek or switching direction
+                                // Chain position from previous tap if overlay is still active in same direction:
+                                val isChainingPosition = (isFastSeeking || showSeekOverlay) && lastSeekDirection == 1
+                                val startPos = if (isChainingPosition) fastSeekTargetPos else exoPlayer.currentPosition
+
+                                // Only continue hold acceleration timer if physically holding (isFastSeeking == true)
                                 if (!isFastSeeking || lastSeekDirection != 1) {
                                     seekHoldStartTime = now
                                     lastSeekDirection = 1
                                 }
+                                if (!isChainingPosition) {
+                                    fastSeekAccumulator = 0L
+                                }
 
                                 val holdDuration = now - seekHoldStartTime
-                                val step = calculateSeekStep(holdDuration, maxDur)
+                                val step = calculateSeekStep(holdDuration, if (playerDuration > 0L) playerDuration else 0L)
 
-                                val startPos = if (isFastSeeking) fastSeekTargetPos else exoPlayer.currentPosition
                                 val newTarget = (startPos + step).coerceAtMost(maxDur)
                                 isFastSeeking = true
+                                showSeekOverlay = true
+                                seekEventTrigger = now
                                 fastSeekTargetPos = newTarget
                                 fastSeekAccumulator += step
                                 return@onPreviewKeyEvent true
@@ -736,11 +877,15 @@ private fun PlayerContent(
                         }
                     }
                 } else if (event.type == KeyEventType.KeyUp) {
-                    if ((event.key == Key.DirectionLeft || event.key == Key.DirectionRight) && isFastSeeking) {
+                    if ((event.key == Key.DirectionLeft || event.key == Key.DirectionRight ||
+                         event.key == Key.MediaRewind || event.key == Key.MediaFastForward ||
+                         event.key == Key.MediaStepBackward || event.key == Key.MediaStepForward) && isFastSeeking) {
+                        isBuffering = true
                         exoPlayer.seekTo(fastSeekTargetPos)
+                        currentPosition = fastSeekTargetPos
                         isFastSeeking = false
                         seekHoldStartTime = 0L
-                        lastSeekDirection = 0
+                        seekEventTrigger = System.currentTimeMillis()
                         runCatching { playPauseFocusRequester.requestFocus() }
                         return@onPreviewKeyEvent true
                     }
@@ -778,17 +923,24 @@ private fun PlayerContent(
                     useController = false
                     keepScreenOn = true
                     subtitleView?.apply {
+                        val colorInt = getSubtitleTextColor(selectedSubtitleColorName)
+                        val bgColorInt = getSubtitleBgColor(selectedSubtitleBgColorName, selectedSubtitleBgOpacity)
+                        val density = ctx.resources.displayMetrics.density
+                        val bottomMarginPx = (density * selectedSubtitleBottomSpacing).toInt()
+
                         setStyle(
                             CaptionStyleCompat(
-                                android.graphics.Color.WHITE,
-                                android.graphics.Color.BLACK,
+                                colorInt,
+                                bgColorInt,
                                 android.graphics.Color.TRANSPARENT,
                                 CaptionStyleCompat.EDGE_TYPE_OUTLINE,
                                 android.graphics.Color.BLACK,
                                 null
                             )
                         )
-                        setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+                        setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, selectedSubtitleFontSize)
+                        setPadding(0, 0, 0, bottomMarginPx)
+                        setBottomPaddingFraction(selectedSubtitleBottomSpacing / 600f)
                     }
                     playerViewRef = this
                 }
@@ -806,6 +958,7 @@ private fun PlayerContent(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 28.dp, end = 28.dp)
+                .zIndex(5f)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -834,7 +987,7 @@ private fun PlayerContent(
 
         // Top Title Header with smooth gradient scrim
         AnimatedVisibility(
-            visible = controlsVisible && title.isNotBlank(),
+            visible = controlsVisible && hasHeaderContent,
             enter = fadeIn(tween(250)),
             exit = fadeOut(tween(250)),
             modifier = Modifier.align(Alignment.TopCenter)
@@ -851,21 +1004,76 @@ private fun PlayerContent(
                             )
                         )
                     )
-                    .padding(top = 28.dp, bottom = 44.dp, start = 40.dp, end = 40.dp),
+                    .padding(top = 22.dp, bottom = 44.dp, start = 40.dp, end = 40.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = title,
-                    color = Color.White,
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    if (displayMainTitle.isNotBlank()) {
+                        Text(
+                            text = displayMainTitle,
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+
+                    if (displayMainTitle.isNotBlank() && (displayEp.isNotBlank() || displayEpTitle.isNotBlank())) {
+                        Text(
+                            text = "|",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Light,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+
+                    if (displayEp.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.White)
+                                .padding(horizontal = 8.dp, vertical = 2.5.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = displayEp,
+                                color = Color.Black,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.3.sp
+                            )
+                        }
+                    }
+
+                    if (displayEp.isNotBlank() && displayEpTitle.isNotBlank()) {
+                        Text(
+                            text = "|",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Light,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+
+                    if (displayEpTitle.isNotBlank()) {
+                        Text(
+                            text = displayEpTitle,
+                            color = AccentGreen,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+                }
             }
         }
 
         // Buffering Indicator (Clean Circular Spinner without text)
-        if (isBuffering && !showSeekOverlay) {
+        if (isBuffering && !isFastSeeking) {
             CircularProgressIndicator(
                 color = Color(0xFFE50914),
                 trackColor = Color.White.copy(alpha = 0.2f),
@@ -876,67 +1084,108 @@ private fun PlayerContent(
             )
         }
 
-        // Center Controls: Fixed Center Play/Pause with Pop-up Seek Card Overlay on Top
-        Box(
-            modifier = Modifier.align(Alignment.Center),
-            contentAlignment = Alignment.Center
+        // Left Side: Rewind Pop-up Seek Card (Flush to left screen edge)
+        AnimatedVisibility(
+            visible = showSeekOverlay && (lastSeekDirection == -1 || fastSeekAccumulator < 0),
+            enter = fadeIn(tween(150)) + slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(150)) + scaleIn(initialScale = 0.9f),
+            exit = fadeOut(tween(150)) + slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(150)) + scaleOut(targetScale = 0.9f),
+            modifier = Modifier.align(Alignment.CenterStart)
         ) {
-            // Center Play/Pause Button
-            AnimatedVisibility(
-                visible = controlsVisible && !isBuffering,
-                enter = fadeIn(tween(250)),
-                exit = fadeOut(tween(250))
+            val leftCardShape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp, topStart = 0.dp, bottomStart = 0.dp)
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .width(105.dp)
+                    .shadow(elevation = 10.dp, shape = leftCardShape)
+                    .clip(leftCardShape)
+                    .background(Color(0xFF141414).copy(alpha = 0.92f))
+                    .border(1.dp, Color.White.copy(alpha = 0.25f), leftCardShape)
+                    .padding(horizontal = 8.dp, vertical = 12.dp)
             ) {
-                CenterPlayButton(
-                    isPlaying = isPlaying,
-                    focusRequester = playPauseFocusRequester,
-                    onFocusGained = { activeFocusArea = PlayerFocusArea.PLAY_PAUSE },
-                    onClick = {
-                        if (exoPlayer.isPlaying) {
-                            exoPlayer.pause()
-                        } else {
-                            exoPlayer.play()
-                        }
-                    }
-                )
-            }
-
-            // Seek Pop-up Card (Overlaid upon Buffering & Play/Pause with subtle opacity, auto-hides after 1.5s)
-            AnimatedVisibility(
-                visible = showSeekOverlay,
-                enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.88f, animationSpec = tween(150)),
-                exit = fadeOut(tween(250)) + scaleOut(targetScale = 0.88f, animationSpec = tween(250))
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF141414).copy(alpha = 0.88f))
-                        .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-                        .padding(horizontal = 26.dp, vertical = 14.dp)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        // Centered Forward / Backward Logo
-                        Icon(
-                            imageVector = if (fastSeekAccumulator < 0) Icons.Default.FastRewind else Icons.Default.FastForward,
-                            contentDescription = if (fastSeekAccumulator < 0) "Rewind" else "Fast Forward",
-                            tint = Color(0xFFE50914),
-                            modifier = Modifier.size(34.dp)
-                        )
+                    Icon(
+                        imageVector = Icons.Default.FastRewind,
+                        contentDescription = "Rewind",
+                        tint = Color(0xFFE50914),
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = formatSeekDelta(fastSeekAccumulator),
+                        color = Color(0xFFE50914),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+//                    Spacer(Modifier.height(2.dp))
+//                    Text(
+//                        text = formatTime(fastSeekTargetPos),
+//                        color = Color.White,
+//                        fontSize = 12.sp,
+//                        fontWeight = FontWeight.SemiBold,
+//                        textAlign = TextAlign.Center,
+//                        maxLines = 1,
+//                        modifier = Modifier.fillMaxWidth()
+//                    )
+                }
+            }
+        }
 
-                        Spacer(Modifier.height(8.dp))
-
-                        // Current Seek Time / Total Time
-                        Text(
-                            text = "${formatTime(fastSeekTargetPos)} / ${formatTime(duration)}",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+        // Right Side: Forward Pop-up Seek Card (Flush to right screen edge)
+        AnimatedVisibility(
+            visible = showSeekOverlay && (lastSeekDirection == 1 || fastSeekAccumulator > 0),
+            enter = fadeIn(tween(150)) + slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(150)) + scaleIn(initialScale = 0.9f),
+            exit = fadeOut(tween(150)) + slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(150)) + scaleOut(targetScale = 0.9f),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            val rightCardShape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp, topEnd = 0.dp, bottomEnd = 0.dp)
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .width(105.dp)
+                    .shadow(elevation = 10.dp, shape = rightCardShape)
+                    .clip(rightCardShape)
+                    .background(Color(0xFF141414).copy(alpha = 0.92f))
+                    .border(1.dp, Color.White.copy(alpha = 0.25f), rightCardShape)
+                    .padding(horizontal = 8.dp, vertical = 12.dp)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FastForward,
+                        contentDescription = "Fast Forward",
+                        tint = Color(0xFFE50914),
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = formatSeekDelta(fastSeekAccumulator),
+                        color = Color(0xFFE50914),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+//                    Spacer(Modifier.height(2.dp))
+//                    Text(
+//                        text = formatTime(fastSeekTargetPos),
+//                        color = Color.White,
+//                        fontSize = 12.sp,
+//                        fontWeight = FontWeight.SemiBold,
+//                        textAlign = TextAlign.Center,
+//                        maxLines = 1,
+//                        modifier = Modifier.fillMaxWidth()
+//                    )
                 }
             }
         }
@@ -970,58 +1219,84 @@ private fun PlayerContent(
                     val progress = if (duration > 0) (displayPosition.toFloat() / duration.toFloat()) else 0f
                     val bufferProgress = if (duration > 0) (bufferedPosition.toFloat() / duration.toFloat()) else 0f
 
+                    // Compact Play/Pause Button (Left of Left Duration)
+                    PlayPauseButton(
+                        isPlaying = isPlaying,
+                        focusRequester = playPauseFocusRequester,
+                        onFocusGained = { activeFocusArea = PlayerFocusArea.PLAY_PAUSE },
+                        onClick = {
+                            if (exoPlayer.isPlaying) {
+                                exoPlayer.pause()
+                            } else {
+                                exoPlayer.play()
+                            }
+                        }
+                    )
+
+                    Spacer(Modifier.width(20.dp))
+
                     // Left Side: Current / Seek Position Time
                     Box(
                         modifier = Modifier
+                            .widthIn(min = if (duration >= 3600_000L) 84.dp else 68.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(Color.White.copy(alpha = 0.12f))
                             .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = formatTime(displayPosition),
                             color = Color.White,
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
                         )
                     }
 
-                    // Middle: Ultra-Smooth Glitch-Free Canvas Seekbar
+                    // Middle: Ultra-Smooth Custom Seekbar with Preload Buffer Visualization
                     Canvas(
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 16.dp)
-                            .height(20.dp)
+                            .height(22.dp)
                     ) {
-                        val barHeight = 5.dp.toPx()
+                        val barHeight = 5.5.dp.toPx()
                         val cornerRadius = CornerRadius(barHeight / 2, barHeight / 2)
                         val centerY = size.height / 2
                         val barTop = centerY - (barHeight / 2)
 
-                        // 1. Background Track
+                        // 1. Background Total Track
                         drawRoundRect(
-                            color = Color.White.copy(alpha = 0.22f),
+                            color = Color.White.copy(alpha = 0.20f),
                             topLeft = Offset(0f, barTop),
                             size = Size(size.width, barHeight),
                             cornerRadius = cornerRadius
                         )
 
-                        // 2. Buffer Progress Track
-                        if (bufferProgress > 0f) {
-                            val bufferWidth = (size.width * bufferProgress.coerceIn(0f, 1f)).coerceAtLeast(0f)
-                            if (bufferWidth > 0f) {
-                                drawRoundRect(
-                                    color = Color.White.copy(alpha = 0.45f),
-                                    topLeft = Offset(0f, barTop),
-                                    size = Size(bufferWidth, barHeight),
-                                    cornerRadius = cornerRadius
-                                )
-                            }
+                        // 2. Base Buffer Track (Entire contiguous buffered range)
+                        val bufferEndX = (size.width * bufferProgress.coerceIn(0f, 1f)).coerceAtLeast(0f)
+                        if (bufferEndX > 0f) {
+                            drawRoundRect(
+                                color = Color.White.copy(alpha = 0.35f),
+                                topLeft = Offset(0f, barTop),
+                                size = Size(bufferEndX, barHeight),
+                                cornerRadius = cornerRadius
+                            )
                         }
 
-                        // 3. Played Progress Track with Gradient
+                        // 3. Highlighted Preload Track (Ahead of playhead from current point)
                         val playedWidth = (size.width * progress.coerceIn(0f, 1f)).coerceAtLeast(0f)
+                        if (bufferEndX > playedWidth) {
+                            drawRoundRect(
+                                color = Color.White.copy(alpha = 0.65f),
+                                topLeft = Offset(playedWidth, barTop),
+                                size = Size(bufferEndX - playedWidth, barHeight),
+                                cornerRadius = cornerRadius
+                            )
+                        }
+
+                        // 4. Played Progress Track with Gradient
                         if (playedWidth > 0f) {
                             drawRoundRect(
                                 brush = Brush.horizontalGradient(
@@ -1035,9 +1310,9 @@ private fun PlayerContent(
                             )
                         }
 
-                        // 4. Scrubber Thumb
-                        if (progress > 0f) {
-                            val thumbRadius = 6.5.dp.toPx()
+                        // 5. Scrubber Thumb (Expands slightly when seeking/rewinding)
+                        if (progress > 0f || isFastSeeking || showSeekOverlay) {
+                            val thumbRadius = if (isFastSeeking || showSeekOverlay) 7.5.dp.toPx() else 6.0.dp.toPx()
                             val thumbX = playedWidth.coerceIn(thumbRadius, size.width - thumbRadius)
 
                             // Outer Red Ring
@@ -1049,7 +1324,7 @@ private fun PlayerContent(
                             // Inner White Center
                             drawCircle(
                                 color = Color.White,
-                                radius = thumbRadius - 2.2.dp.toPx(),
+                                radius = (thumbRadius - 2.2.dp.toPx()).coerceAtLeast(1f),
                                 center = Offset(thumbX, centerY)
                             )
                         }
@@ -1058,17 +1333,19 @@ private fun PlayerContent(
                     // Right Side: Total Duration Time
                     Box(
                         modifier = Modifier
+                            .widthIn(min = if (duration >= 3600_000L) 84.dp else 68.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(Color.White.copy(alpha = 0.12f))
                             .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = formatTime(duration),
                             color = Color.White.copy(alpha = 0.85f),
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -1085,8 +1362,13 @@ private fun PlayerContent(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Black)
-                    .padding(horizontal = 40.dp, vertical = 24.dp)
+                    .background(Color.Black.copy(alpha = 0.65f))
+                    .padding(
+                        start = 40.dp,
+                        end = 40.dp,
+                        top = 24.dp,
+                        bottom = 24.dp
+                    )
             ) {
                 // Row 1: Separate Menu Tabs (Audio, Subtitle, Resolution, Playback Speed)
                 Row(
@@ -1147,6 +1429,20 @@ private fun PlayerContent(
                         },
                         onClick = {
                             activeMenuTab = MenuTab.SPEED
+                        }
+                    )
+
+                    MenuTabPill(
+                        title = "Subtitle Style",
+                        badge = selectedSubtitleColorName,
+                        isSelected = activeMenuTab == MenuTab.SUBTITLE_SETTINGS,
+                        focusRequester = tabSubtitleSettingsFocusRequester,
+                        onFocusGained = {
+                            activeFocusArea = PlayerFocusArea.MENU_TABS
+                            activeMenuTab = MenuTab.SUBTITLE_SETTINGS
+                        },
+                        onClick = {
+                            activeMenuTab = MenuTab.SUBTITLE_SETTINGS
                         }
                     )
                 }
@@ -1271,6 +1567,38 @@ private fun PlayerContent(
                                 }
                             }
                         }
+
+                        MenuTab.SUBTITLE_SETTINGS -> {
+                            SubtitleSettingsContent(
+                                selectedColorName = selectedSubtitleColorName,
+                                selectedBgColorName = selectedSubtitleBgColorName,
+                                selectedBgOpacity = selectedSubtitleBgOpacity,
+                                selectedSizeSp = selectedSubtitleFontSize,
+                                selectedSpacing = selectedSubtitleBottomSpacing,
+                                firstOptionFocusRequester = contentFirstOptionFocusRequester,
+                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                onColorChanged = { name ->
+                                    selectedSubtitleColorName = name
+                                    PlayerPreferences.savePreferredSubtitleColor(context, name)
+                                },
+                                onBgColorChanged = { name ->
+                                    selectedSubtitleBgColorName = name
+                                    PlayerPreferences.savePreferredSubtitleBgColor(context, name)
+                                },
+                                onBgOpacityChanged = { opacity ->
+                                    selectedSubtitleBgOpacity = opacity
+                                    PlayerPreferences.savePreferredSubtitleBgOpacity(context, opacity)
+                                },
+                                onSizeChanged = { size ->
+                                    selectedSubtitleFontSize = size
+                                    PlayerPreferences.savePreferredSubtitleSize(context, size)
+                                },
+                                onSpacingChanged = { spacing ->
+                                    selectedSubtitleBottomSpacing = spacing
+                                    PlayerPreferences.savePreferredSubtitleSpacing(context, spacing)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -1280,7 +1608,7 @@ private fun PlayerContent(
 
 
 @Composable
-private fun CenterPlayButton(
+private fun PlayPauseButton(
     isPlaying: Boolean,
     focusRequester: FocusRequester,
     onFocusGained: () -> Unit,
@@ -1288,7 +1616,7 @@ private fun CenterPlayButton(
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.14f else 1.0f,
+        targetValue = if (isFocused) 1.15f else 1.0f,
         animationSpec = tween(150),
         label = "play_btn_scale"
     )
@@ -1302,15 +1630,15 @@ private fun CenterPlayButton(
                 if (it.isFocused) onFocusGained()
             }
             .scale(scale)
-            .size(68.dp)
+            .size(36.dp)
             .clip(CircleShape)
             .background(
-                color = if (isFocused) Color.White else Color(0xFF1E1E1E).copy(alpha = 0.85f),
+                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.15f),
                 shape = CircleShape
             )
             .border(
-                width = if (isFocused) 2.5.dp else 1.5.dp,
-                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.35f),
+                width = if (isFocused) 2.dp else 1.dp,
+                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.25f),
                 shape = CircleShape
             )
             .onPreviewKeyEvent { event ->
@@ -1331,9 +1659,9 @@ private fun CenterPlayButton(
             contentDescription = if (isPlaying) "Pause" else "Play",
             tint = if (isFocused) Color.Black else Color.White,
             modifier = Modifier
-                .size(38.dp)
+                .size(20.dp)
                 .then(
-                    if (!isPlaying) Modifier.padding(start = 3.dp) else Modifier
+                    if (!isPlaying) Modifier.padding(start = 2.dp) else Modifier
                 )
         )
     }
@@ -1407,42 +1735,40 @@ private fun MenuTabPill(
 private fun OptionContentPill(
     label: String,
     isSelected: Boolean,
-    focusRequester: FocusRequester?,
+    focusRequester: FocusRequester? = null,
     onFocusGained: () -> Unit,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val requester = focusRequester ?: remember { FocusRequester() }
 
-    val pillBgColor = when {
-        isFocused -> Color.White
-        isSelected -> Color(0xFF333333)
-        else -> Color(0xFF222222)
-    }
-
-    val textColor = when {
-        isFocused -> Color.Black
-        isSelected -> GoldAccent
-        else -> Color.White.copy(alpha = 0.9f)
-    }
-
-    Box(
-        contentAlignment = Alignment.Center,
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
         modifier = Modifier
             .focusRequester(requester)
             .onFocusChanged {
                 isFocused = it.isFocused
                 if (it.isFocused) onFocusGained()
             }
-            .width(110.dp)
-            .height(44.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(pillBgColor)
+            .background(
+                when {
+                    isFocused -> Color.White
+                    isSelected -> Color(0xFFE50914).copy(alpha = 0.3f)
+                    else -> Color.White.copy(alpha = 0.1f)
+                }
+            )
             .border(
-                width = 2.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
+                width = if (isFocused) 2.dp else if (isSelected) 1.5.dp else 1.dp,
+                color = when {
+                    isFocused -> Color.White
+                    isSelected -> Color(0xFFE50914)
+                    else -> Color.White.copy(alpha = 0.2f)
+                },
                 shape = RoundedCornerShape(8.dp)
             )
+            .clickable { onClick() }
             .onPreviewKeyEvent { event ->
                 if (
                     event.type == KeyEventType.KeyDown &&
@@ -1454,12 +1780,12 @@ private fun OptionContentPill(
                     false
                 }
             }
-            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Text(
             text = label,
-            color = textColor,
-            fontSize = 14.sp,
+            color = if (isFocused) Color.Black else if (isSelected) Color.White else Color.White.copy(alpha = 0.9f),
+            fontSize = 12.sp,
             fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
         )
     }
@@ -1499,28 +1825,31 @@ private fun applyInitialPreferences(
     val tracks = exoPlayer.currentTracks
     if (tracks.groups.isEmpty()) return
 
-    // 1. Initial Quality Selection Logic (Saved Pref -> 1080p -> 720p -> Top/Highest)
+    // 1. Initial Quality Selection Logic (Saved Pref -> 1080p -> 720p -> 480p -> Highest)
     val videoGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
     val savedQuality = PlayerPreferences.getPreferredQuality(context)
 
-    data class QualityCandidate(val height: Int, val label: String, val group: Tracks.Group, val index: Int)
+    data class QualityCandidate(val bitrate: Int, val label: String, val group: Tracks.Group, val index: Int)
     val qualityCandidates = mutableListOf<QualityCandidate>()
 
     for (group in videoGroups) {
         for (i in 0 until group.length) {
             val format = group.getTrackFormat(i)
-            if (format.height > 0) {
-                val label = if (format.height == 720) "HD 720P" else "${format.height}p"
-                qualityCandidates.add(QualityCandidate(format.height, label, group, i))
+            val label = getVideoTrackLabel(format)
+            if (label != "Video") {
+                val bitrate = if (format.bitrate > 0) format.bitrate else if (format.peakBitrate > 0) format.peakBitrate else 0
+                qualityCandidates.add(QualityCandidate(bitrate, label, group, i))
             }
         }
     }
 
     if (qualityCandidates.isNotEmpty()) {
         val targetQuality = qualityCandidates.firstOrNull { it.label.equals(savedQuality, ignoreCase = true) }
-            ?: qualityCandidates.firstOrNull { it.height == 1080 }
-            ?: qualityCandidates.firstOrNull { it.height == 720 }
-            ?: qualityCandidates.maxByOrNull { it.height }
+            ?: qualityCandidates.firstOrNull { it.label.equals("1080p", ignoreCase = true) || it.bitrate == 1000000 }
+            ?: qualityCandidates.firstOrNull { it.label.equals("720p", ignoreCase = true) || it.bitrate == 600000 }
+            ?: qualityCandidates.firstOrNull { it.label.equals("480p", ignoreCase = true) || it.bitrate == 400000 }
+            ?: qualityCandidates.maxByOrNull { it.bitrate }
+            ?: qualityCandidates.firstOrNull()
 
         targetQuality?.let { candidate ->
             val newParams = exoPlayer.trackSelectionParameters.buildUpon()
@@ -1646,6 +1975,35 @@ private fun applyInitialPreferences(
     }
 }
 
+private fun getVideoTrackLabel(format: Format): String {
+    return if (format.width > 0 || format.height > 0) {
+        val bitrate = if (format.bitrate != Format.NO_VALUE && format.bitrate > 0) {
+            format.bitrate
+        } else if (format.peakBitrate != Format.NO_VALUE && format.peakBitrate > 0) {
+            format.peakBitrate
+        } else {
+            0
+        }
+
+        when (bitrate) {
+            1000000 -> "1080p"
+            600000 -> "720p"
+            400000 -> "480p"
+            else -> {
+                if (bitrate > 0) {
+                    "${bitrate}p"
+                } else if (format.height > 0) {
+                    "${format.height}p"
+                } else {
+                    "Video"
+                }
+            }
+        }
+    } else {
+        "Video"
+    }
+}
+
 @OptIn(UnstableApi::class)
 private fun getQualityOptions(
     context: Context,
@@ -1659,7 +2017,7 @@ private fun getQualityOptions(
 
     data class VideoTrackItem(
         val label: String,
-        val height: Int,
+        val bitrate: Int,
         val group: Tracks.Group,
         val index: Int,
         val isSelected: Boolean
@@ -1669,21 +2027,21 @@ private fun getQualityOptions(
     for (group in videoGroups) {
         for (i in 0 until group.length) {
             val format = group.getTrackFormat(i)
-            val height = format.height
-            if (height > 0) {
-                val label = if (height == 720) "HD 720P" else "${height}p"
+            val label = getVideoTrackLabel(format)
+            if (label != "Video") {
+                val bitrate = if (format.bitrate > 0) format.bitrate else if (format.peakBitrate > 0) format.peakBitrate else 0
                 val isSelected = group.isTrackSelected(i)
-                items.add(VideoTrackItem(label, height, group, i, isSelected))
+                items.add(VideoTrackItem(label, bitrate, group, i, isSelected))
             }
         }
     }
 
-    val sortedItems = items.sortedByDescending { it.height }.distinctBy { it.label }
+    val sortedItems = items.sortedByDescending { it.bitrate }.distinctBy { it.label }
 
     for (item in sortedItems) {
         options.add(
             TrackOption(
-                id = "${item.height}",
+                id = "${item.bitrate}_${item.label}",
                 label = item.label,
                 isSelected = item.isSelected,
                 onSelect = {
@@ -1703,7 +2061,7 @@ private fun getQualityOptions(
     }
 
     if (options.isEmpty()) {
-        listOf("1080p", "HD 720P", "480p", "360p").forEach { res ->
+        listOf("1080p", "720p", "480p").forEach { res ->
             options.add(
                 TrackOption(
                     id = res,
@@ -1856,8 +2214,7 @@ private fun getSpeedOptions(
 }
 
 private fun formatTime(millis: Long): String {
-    if (millis <= 0) return "0:00:00"
-    val totalSeconds = millis / 1000
+    val totalSeconds = millis.coerceAtLeast(0L) / 1000
     val seconds = totalSeconds % 60
     val minutes = (totalSeconds / 60) % 60
     val hours = totalSeconds / 3600
@@ -1869,24 +2226,39 @@ private fun formatTime(millis: Long): String {
 }
 
 private fun calculateSeekStep(holdDurationMs: Long, totalDurationMs: Long): Long {
-    val baseStep = when {
-        holdDurationMs < 800L -> 10_000L       // 10s (Single tap & initial press)
-        holdDurationMs < 2000L -> 30_000L      // 30s (Short hold for intros/recaps)
-        holdDurationMs < 4000L -> 60_000L      // 1 minute (Medium hold)
-        holdDurationMs < 6500L -> 120_000L     // 2 minutes (Sustained hold)
-        else -> 300_000L                       // 5 minutes max base step
-    }
+    return when {
+        // 1. Taps / Short Hold (< 0.8s): Stays at 10s (fine-grained navigation for dialogues and small skips)
+        holdDurationMs < 800L -> 10_000L
 
-    // For movies (> 60 mins), dynamically scale up higher tiers so large 3hr movies can be traversed effortlessly:
-    return if (totalDurationMs > 3_600_000L && holdDurationMs >= 2000L) {
-        val durationRatioStep = when {
-            holdDurationMs < 4000L -> totalDurationMs / 120 // ~1.5 min per tick on a 3hr movie
-            holdDurationMs < 6500L -> totalDurationMs / 60  // ~3 min per tick on a 3hr movie
-            else -> totalDurationMs / 25                    // ~7.2 min per tick on a 3hr movie
+        // 2. Short Hold (0.8s – 2.0s): Ramps up to 30s per tick (quickly skips intros & recaps)
+        holdDurationMs < 2000L -> 30_000L
+
+        // 3. Medium Hold (2.0s – 4.0s): Jumps 1 minute (or scaled proportionally to content length)
+        holdDurationMs < 4000L -> {
+            val baseStep = 60_000L // 1 minute
+            if (totalDurationMs > 3_600_000L) {
+                maxOf(baseStep, totalDurationMs / 120) // ~1.5 min per tick for a 3-hour movie
+            } else {
+                baseStep
+            }
         }
-        maxOf(baseStep, durationRatioStep).coerceAtMost(600_000L) // Cap at 10 min per tick
-    } else {
-        baseStep
+
+        // 4. Sustained Hold (4.0s+): Dynamically scales to ~5%–8% of total duration per second
+        // (~3–7 minutes per tick for a 3-hour movie, crossing 3-hour movie in ~5–6s)
+        else -> {
+            if (totalDurationMs > 0L) {
+                val stepRatio = if (holdDurationMs < 5500L) 0.05f else 0.08f
+                // Scale ~3 to ~7 min per tick for 3hr movie (180min * 0.05 / 2.5 ~ 3.6min, 180min * 0.08 / 2.0 ~ 7.2min)
+                val dynamicStep = if (holdDurationMs < 5500L) {
+                    maxOf(180_000L, (totalDurationMs * stepRatio / 2.5f).toLong()) // ~3–4 min
+                } else {
+                    maxOf(300_000L, (totalDurationMs * stepRatio / 2.0f).toLong()) // ~6–7 min
+                }
+                dynamicStep.coerceAtMost(600_000L) // Capped at 10 min max per tick
+            } else {
+                if (holdDurationMs < 5500L) 180_000L else 360_000L
+            }
+        }
     }
 }
 
@@ -1896,12 +2268,358 @@ private fun formatSeekDelta(millis: Long): String {
     val hours = absSeconds / 3600
     val minutes = (absSeconds % 3600) / 60
     val seconds = absSeconds % 60
-    return if (hours > 0) {
-        String.format("%s%d:%02d:%02d", sign, hours, minutes, seconds)
-    } else if (minutes > 0) {
-        String.format("%s%d:%02d min", sign, minutes, seconds)
-    } else {
-        String.format("%s%ds", sign, seconds)
+    return when {
+        hours > 0 && minutes > 0 -> "$sign${hours}h ${minutes}m"
+        hours > 0 -> "$sign${hours}h"
+        minutes > 0 && seconds > 0 -> "$sign${minutes}m ${seconds}s"
+        minutes > 0 -> "$sign${minutes}m"
+        else -> "$sign${seconds}s"
     }
+}
+
+private fun getSubtitleTextColor(colorName: String): Int {
+    return when (colorName.lowercase()) {
+        "yellow" -> android.graphics.Color.YELLOW
+        "green" -> android.graphics.Color.parseColor("#00E676")
+        "purple" -> android.graphics.Color.parseColor("#BA68C8")
+        "cyan" -> android.graphics.Color.CYAN
+        else -> android.graphics.Color.WHITE
+    }
+}
+
+private fun getSubtitleBgColor(colorName: String, opacity: Float): Int {
+    val alpha = (opacity.coerceIn(0f, 1f) * 255).toInt()
+    if (alpha <= 0) return android.graphics.Color.TRANSPARENT
+    val baseColor = when (colorName.lowercase()) {
+        "white" -> android.graphics.Color.WHITE
+        "dark gray" -> android.graphics.Color.parseColor("#2B2B2B")
+        "navy blue", "navy", "dark blue" -> android.graphics.Color.parseColor("#0D1B2A")
+        else -> android.graphics.Color.BLACK
+    }
+    return android.graphics.Color.argb(
+        alpha,
+        android.graphics.Color.red(baseColor),
+        android.graphics.Color.green(baseColor),
+        android.graphics.Color.blue(baseColor)
+    )
+}
+
+@Composable
+private fun SubtitleSettingsContent(
+    selectedColorName: String,
+    selectedBgColorName: String,
+    selectedBgOpacity: Float,
+    selectedSizeSp: Float,
+    selectedSpacing: Float,
+    firstOptionFocusRequester: FocusRequester,
+    onFocusGained: () -> Unit,
+    onColorChanged: (String) -> Unit,
+    onBgColorChanged: (String) -> Unit,
+    onBgOpacityChanged: (Float) -> Unit,
+    onSizeChanged: (Float) -> Unit,
+    onSpacingChanged: (Float) -> Unit
+) {
+    data class SubtitleColorItem(val name: String, val color: Color)
+    val colorItems = remember {
+        listOf(
+            SubtitleColorItem("White", Color(0xFFFFFFFF)),
+            SubtitleColorItem("Yellow", Color(0xFFFFEB3B)),
+            SubtitleColorItem("Green", Color(0xFF00E676)),
+            SubtitleColorItem("Purple", Color(0xFFBA68C8)),
+            SubtitleColorItem("Cyan", Color(0xFF00E5FF))
+        )
+    }
+
+    val bgColorItems = remember {
+        listOf(
+            SubtitleColorItem("Black", Color(0xFF000000)),
+            SubtitleColorItem("White", Color(0xFFFFFFFF)),
+            SubtitleColorItem("Dark Gray", Color(0xFF2B2B2B)),
+            SubtitleColorItem("Navy Blue", Color(0xFF0D1B2A))
+        )
+    }
+
+    data class SubtitleOpacityItem(val label: String, val opacity: Float)
+    val opacityItems = remember {
+        listOf(
+            SubtitleOpacityItem("1", 1.0f),
+            SubtitleOpacityItem("0.75", 0.75f),
+            SubtitleOpacityItem("0.5", 0.5f),
+            SubtitleOpacityItem("0.25", 0.25f),
+            SubtitleOpacityItem("0", 0.0f)
+        )
+    }
+
+    data class SubtitleSizeItem(val label: String, val size: Float)
+    val sizeItems = remember {
+        listOf(
+            SubtitleSizeItem("18px", 18f),
+            SubtitleSizeItem("22px", 22f),
+            SubtitleSizeItem("26px", 26f),
+            SubtitleSizeItem("30px", 30f),
+            SubtitleSizeItem("34px", 34f)
+        )
+    }
+
+    data class SubtitleSpacingItem(val label: String, val spacing: Float)
+    val spacingItems = remember {
+        listOf(
+            SubtitleSpacingItem("0", 0f),
+            SubtitleSpacingItem("20", 20f),
+            SubtitleSpacingItem("40", 40f),
+            SubtitleSpacingItem("60", 60f),
+            SubtitleSpacingItem("80", 80f),
+            SubtitleSpacingItem("100", 100f)
+        )
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "Subtitle Style & Appearance",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 10.dp)
+        )
+
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // Section 1: Color (Text Color)
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Color:",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    colorItems.forEachIndexed { index, item ->
+                        ColorOptionPill(
+                            name = item.name,
+                            color = item.color,
+                            isSelected = selectedColorName.equals(item.name, ignoreCase = true),
+                            focusRequester = if (index == 0) firstOptionFocusRequester else null,
+                            onFocusGained = onFocusGained,
+                            onSelect = { onColorChanged(item.name) }
+                        )
+                    }
+                }
+            }
+
+            // Section 2: Background Color
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Bg Color:",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    bgColorItems.forEach { item ->
+                        ColorOptionPill(
+                            name = item.name,
+                            color = item.color,
+                            isSelected = selectedBgColorName.equals(item.name, ignoreCase = true),
+                            onFocusGained = onFocusGained,
+                            onSelect = { onBgColorChanged(item.name) }
+                        )
+                    }
+                }
+            }
+
+            // Section 3: Background Opacity
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Opacity:",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    opacityItems.forEach { item ->
+                        SubtitleSmallOptionPill(
+                            label = item.label,
+                            isSelected = kotlin.math.abs(selectedBgOpacity - item.opacity) < 0.05f,
+                            onFocusGained = onFocusGained,
+                            onClick = { onBgOpacityChanged(item.opacity) }
+                        )
+                    }
+                }
+            }
+
+            // Section 4: Font Size
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Size:",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    sizeItems.forEach { item ->
+                        SubtitleSmallOptionPill(
+                            label = item.label,
+                            isSelected = kotlin.math.abs(selectedSizeSp - item.size) < 0.5f,
+                            onFocusGained = onFocusGained,
+                            onClick = { onSizeChanged(item.size) }
+                        )
+                    }
+                }
+            }
+
+            // Section 5: Bottom Margin
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Bottom Margin:",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    spacingItems.forEach { item ->
+                        SubtitleSmallOptionPill(
+                            label = item.label,
+                            isSelected = kotlin.math.abs(selectedSpacing - item.spacing) < 0.5f,
+                            onFocusGained = onFocusGained,
+                            onClick = { onSpacingChanged(item.spacing) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColorOptionPill(
+    name: String,
+    color: Color,
+    isSelected: Boolean,
+    focusRequester: FocusRequester? = null,
+    onFocusGained: () -> Unit,
+    onSelect: () -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .onFocusChanged {
+                isFocused = it.isFocused
+                if (it.isFocused) onFocusGained()
+            }
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                when {
+                    isFocused -> Color.White
+                    isSelected -> Color(0xFFE50914).copy(alpha = 0.3f)
+                    else -> Color.White.copy(alpha = 0.1f)
+                }
+            )
+            .border(
+                width = if (isFocused) 2.dp else if (isSelected) 1.5.dp else 1.dp,
+                color = when {
+                    isFocused -> Color.White
+                    isSelected -> Color(0xFFE50914)
+                    else -> Color.White.copy(alpha = 0.2f)
+                },
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable { onSelect() }
+            .onPreviewKeyEvent { event ->
+                if (
+                    event.type == KeyEventType.KeyDown &&
+                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)
+                ) {
+                    onSelect()
+                    true
+                } else {
+                    false
+                }
+            }
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(13.dp)
+                .clip(CircleShape)
+                .background(color)
+                .border(1.dp, if (isFocused) Color.Black.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.6f), CircleShape)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = name,
+            color = if (isFocused) Color.Black else if (isSelected) Color.White else Color.White.copy(alpha = 0.9f),
+            fontSize = 12.sp,
+            fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun SubtitleSmallOptionPill(
+    label: String,
+    isSelected: Boolean,
+    focusRequester: FocusRequester? = null,
+    onFocusGained: () -> Unit,
+    onClick: () -> Unit
+) {
+    OptionContentPill(
+        label = label,
+        isSelected = isSelected,
+        focusRequester = focusRequester,
+        onFocusGained = onFocusGained,
+        onClick = onClick
+    )
 }
 

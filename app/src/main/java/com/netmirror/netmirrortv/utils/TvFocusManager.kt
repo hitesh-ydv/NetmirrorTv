@@ -8,6 +8,7 @@ object TvFocusManager {
     var drawerRequesters: List<FocusRequester> = emptyList()
     var lastFocusedContentRequester: FocusRequester? = null
     var firstCardRequester: FocusRequester? = null
+    var accountDrawerRequester: FocusRequester? = null
     var lastFocusedSearchCardId: String? = null
 
     // Track focused card or carousel in HomeScreen across navigation
@@ -17,6 +18,17 @@ object TvFocusManager {
 
     // Default focus target of the currently visible screen
     var currentScreenContentRequester: FocusRequester? = null
+
+    // Track active focus requesters per row position
+    val rowFocusRequesters: MutableMap<Int, FocusRequester> = mutableMapOf()
+
+    fun hasSavedHomeContentFocus(): Boolean {
+        return isCarouselLastFocused || lastFocusedHomeCardId != null
+    }
+
+    fun hasSavedContentFocus(): Boolean {
+        return hasSavedHomeContentFocus() || lastFocusedSearchCardId != null
+    }
 
     /**
      * Safely attempts to request focus on the given FocusRequester.
@@ -33,10 +45,12 @@ object TvFocusManager {
      */
     fun moveFocusToContent(): Boolean {
         if (isCarouselLastFocused && requestFocus(carousel)) return true
+        if (lastFocusedHomeCardId != null && requestFocus(lastFocusedContentRequester)) return true
         if (requestFocus(lastFocusedContentRequester)) return true
         if (requestFocus(currentScreenContentRequester)) return true
+        if (requestFocus(firstCardRequester)) return true
         if (requestFocus(carousel)) return true
-        return requestFocus(firstCardRequester)
+        return false
     }
 
     /**
@@ -48,5 +62,12 @@ object TvFocusManager {
             if (requestFocus(req)) return true
         }
         return false
+    }
+
+    /**
+     * Attempts to move focus specifically to the Account button in the Navigation Drawer.
+     */
+    fun restoreAccountFocus(): Boolean {
+        return requestFocus(accountDrawerRequester)
     }
 }

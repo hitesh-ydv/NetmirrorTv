@@ -31,7 +31,7 @@ interface ApiService {
         "Pragma: no-cache",
         "Expires: 0",
         "X-Requested-With: NetmirrorNewTV v1.0",
-        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.Gatu v1.0"
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0"
     )
     @GET("newtv/otp.php")
     suspend fun checkOtp(

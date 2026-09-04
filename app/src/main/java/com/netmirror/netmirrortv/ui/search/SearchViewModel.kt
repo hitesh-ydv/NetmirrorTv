@@ -4,10 +4,11 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.netmirror.netmirrortv.model.SearchResponse
+import com.netmirror.netmirrortv.utils.AppSession
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class SearchViewModel(
@@ -28,6 +29,18 @@ class SearchViewModel(
     val error: StateFlow<String?> = _error
 
     private var searchJob: Job? = null
+    private var lastQuery: String = ""
+
+    init {
+        viewModelScope.launch {
+            AppSession.selectedOtt.collectLatest {
+                // When OTT changes, auto reload search if results were already loaded
+                if (_searchResult.value != null) {
+                    search(lastQuery)
+                }
+            }
+        }
+    }
 
     fun search(
 
@@ -40,24 +53,16 @@ class SearchViewModel(
         searchJob?.cancel()
 
         val query = text.trim()
+        lastQuery = query
 
         searchJob = viewModelScope.launch {
             try {
-                // Debounce only while the user is actively typing. An empty
-                // query (screen just opened, or field cleared) should load
-                // "Top Searches" immediately with no artificial delay.
-                if (query.isNotEmpty()) {
-                    delay(350)
-                }
-
                 _loading.value = true
                 _error.value = null
 
                 val result = repository.search(query)
 
                 if (result == null) {
-                    _error.value = "Search Page Loading Fail, Retry after some times."
-                } else if (!result.error.isNullOrEmpty()) {
                     _error.value = "Search Page Loading Fail, Retry after some times."
                 }
 

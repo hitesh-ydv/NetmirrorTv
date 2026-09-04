@@ -5,10 +5,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import android.util.Log
+import com.netmirror.netmirrortv.datastore.AppPreferences
 import com.netmirror.netmirrortv.network.ApiClient
 import com.netmirror.netmirrortv.network.ApiService
 import com.netmirror.netmirrortv.network.BaseUrlProvider
 import com.netmirror.netmirrortv.util.TokenStore
+import com.netmirror.netmirrortv.utils.AppSession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,21 +28,29 @@ private const val ERROR_RESET_DELAY_MS = 5000L
 /**
  * `apiUrl` plays the same role as `route.params.apiUrl` in the RN screen —
  * the working mirror base URL, presumably resolved earlier (e.g. during
- * the splash server check) and handed down to this screen. Wire it up
- * however your nav graph passes that value along.
+ * the splash server check) and handed down to this screen.
  */
 class OtpViewModel(
     application: Application,
     private val apiUrl: String
 ) : AndroidViewModel(application) {
 
-    private val apiService: ApiService by lazy {
-        val validUrl = if (apiUrl.isNotBlank() && apiUrl != "{apiUrl}" && (apiUrl.startsWith("http://") || apiUrl.startsWith("https://"))) {
-            apiUrl
-        } else {
-            BaseUrlProvider.getBaseUrl()
+    private val preferences = AppPreferences(application)
+
+    private suspend fun resolveBaseUrl(): String {
+        if (apiUrl.isNotBlank() && apiUrl != "{apiUrl}" && (apiUrl.startsWith("http://") || apiUrl.startsWith("https://"))) {
+            return apiUrl
         }
-        ApiClient.create(validUrl)
+        val fromSession = AppSession.currentBaseUrl()
+        if (fromSession.isNotBlank()) return fromSession
+
+        val fromProvider = BaseUrlProvider.getBaseUrl()
+        if (fromProvider.isNotBlank()) return fromProvider
+
+        val fromPrefs = preferences.getBaseUrl()
+        if (fromPrefs.isNotBlank()) return fromPrefs
+
+        return ""
     }
 
     private val _uiState = MutableStateFlow(OtpUiState())
@@ -71,10 +82,29 @@ class OtpViewModel(
             _uiState.update { it.copy(isValidating = true) }
 
             try {
+                val baseUrl = resolveBaseUrl()
+                Log.d("OtpViewModel", "checkOtp with url: '$baseUrl', otp: '$otp'")
+
+                if (baseUrl.isBlank()) {
+                    Log.e("OtpViewModel", "No valid Base URL found for OTP check!")
+                    if (otp.isNotEmpty()) {
+                        _uiState.update {
+                            it.copy(isValidating = false, error = "Server connection error. Please restart the app.")
+                        }
+                    } else {
+                        _uiState.update { it.copy(isValidating = false) }
+                    }
+                    return@launch
+                }
+
+                val apiService = ApiClient.create(baseUrl)
                 val res = apiService.checkOtp(otp)
+                Log.d("OtpViewModel", "checkOtp response code: ${res.code()}, isSuccessful: ${res.isSuccessful}")
+
                 val body = res.body()
 
-                if (body == null) {
+                if (!res.isSuccessful || body == null) {
+                    Log.e("OtpViewModel", "checkOtp error body: ${res.errorBody()?.string()}")
                     if (otp.isNotEmpty()) {
                         _uiState.update {
                             it.copy(isValidating = false, error = "An error occurred. Please try again.")
@@ -85,6 +115,7 @@ class OtpViewModel(
                     return@launch
                 }
 
+                Log.d("OtpViewModel", "checkOtp body: status=${body.status}, pub_msg=${body.pub_msg}, usertoken=${body.usertoken}")
                 _uiState.update { it.copy(response = body) }
 
                 when (body.status) {
@@ -112,6 +143,7 @@ class OtpViewModel(
                     else -> _uiState.update { it.copy(isValidating = false) }
                 }
             } catch (e: Exception) {
+                Log.e("OtpViewModel", "checkOtp exception: ${e.message}", e)
                 if (otp.isNotEmpty()) {
                     _uiState.update {
                         it.copy(isValidating = false, error = "An error occurred. Please try again.")

@@ -9,18 +9,23 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,9 +42,11 @@ import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
 import com.netmirror.netmirrortv.utils.TvFocusManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = viewModel(),
@@ -60,11 +67,20 @@ fun HomeScreen(
     val homeResponse = home ?: return
 
     // Holds the FocusRequester of the first card of the first row
-    val firstCardFocusRequester = remember { FocusRequester() }
+    val firstCardFocusRequester = remember(homeResponse) { FocusRequester() }
+    val validPosts = remember(homeResponse.post) {
+        homeResponse.post.filter { row ->
+            row.ids.split(',').any { it.trim().isNotEmpty() }
+        }
+    }
 
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+    val prefetchPortraitWidthDp = remember(screenWidth) { calculateCardWidthForScreen(screenWidth, isPortrait = true) }
+    val prefetchLandscapeWidthDp = remember(screenWidth) { calculateCardWidthForScreen(screenWidth, isPortrait = false) }
     val hasCarousel = homeResponse.slider.isNotEmpty()
     val sliderItemOffset = if (hasCarousel) 1 else 0
 
@@ -74,12 +90,46 @@ fun HomeScreen(
     var lastPage by rememberSaveable { mutableStateOf(selectedPage) }
     var lastOtt by rememberSaveable { mutableStateOf(selectedOtt) }
 
-    LaunchedEffect(firstCardFocusRequester, hasCarousel) {
+    TvFocusManager.firstCardRequester = firstCardFocusRequester
+    if (hasCarousel) {
+        TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
+    } else {
+        TvFocusManager.currentScreenContentRequester = firstCardFocusRequester
+    }
+
+    LaunchedEffect(homeResponse, hasCarousel, firstCardFocusRequester) {
         TvFocusManager.firstCardRequester = firstCardFocusRequester
         if (hasCarousel) {
             TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
         } else {
             TvFocusManager.currentScreenContentRequester = firstCardFocusRequester
+        }
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME, lifecycleOwner) {
+        TvFocusManager.firstCardRequester = firstCardFocusRequester
+        if (hasCarousel) {
+            TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
+        } else {
+            TvFocusManager.currentScreenContentRequester = firstCardFocusRequester
+        }
+
+        if (TvFocusManager.isCarouselLastFocused) {
+            coroutineScope.launch {
+                repeat(10) { attempt ->
+                    if (TvFocusManager.requestFocus(TvFocusManager.carousel)) return@launch
+                    kotlinx.coroutines.delay(30L * (attempt + 1))
+                }
+            }
+        } else if (TvFocusManager.lastFocusedHomeCardId != null) {
+            coroutineScope.launch {
+                repeat(10) { attempt ->
+                    if (TvFocusManager.requestFocus(TvFocusManager.lastFocusedContentRequester)) return@launch
+                    kotlinx.coroutines.delay(30L * (attempt + 1))
+                }
+            }
         }
     }
 
@@ -116,12 +166,13 @@ fun HomeScreen(
                 } else {
                     homeResponse.imageCdnHorizontal ?: homeResponse.imageCdn
                 }
-                val cardWidthDp = if (isPortraitRow) PortraitCardWidth else LandscapeCardWidth
+                val cardWidthDp = if (isPortraitRow) prefetchPortraitWidthDp else prefetchLandscapeWidthDp
                 val aspectRatioValue = if (isPortraitRow) PortraitAspectRatio else LandscapeAspectRatio
                 val widthPx = with(density) { cardWidthDp.toPx() }.toInt()
                 val heightPx = (widthPx / aspectRatioValue).toInt()
 
                 val imageLoader = context.imageLoader
+                val referer = homeResponse.imgReferer
                 row.ids.split(',')
                     .map(String::trim)
                     .filter(String::isNotEmpty)
@@ -134,6 +185,12 @@ fun HomeScreen(
                                     .data(url)
                                     .size(Size(widthPx, heightPx))
                                     .precision(Precision.INEXACT)
+                                    .apply {
+                                        if (!referer.isNullOrBlank()) {
+                                            setHeader("Referer", referer)
+                                        }
+                                        setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                    }
                                     .allowRgb565(true)
                                     .build()
                             )
@@ -142,55 +199,101 @@ fun HomeScreen(
             }
     }
 
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val screenHeight = configuration.screenHeightDp.dp
 
-    LazyColumn(
-        state = listState,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(bottom = 32.dp),
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .padding(start = 100.dp)
-    ) {
-        if (hasCarousel) {
-            item(key = "home-carousel", contentType = "carousel") {
-                HomeCarousel(
-                    slider = homeResponse.slider,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(screenHeight * 0.85f),
-                    onPlay = {},
-                    firstCardRequester = firstCardFocusRequester,
-                    appNavController = appNavController
-                )
+    CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
+        LazyColumn(
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = screenHeight * 0.5f),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .padding(start = 100.dp)
+        ) {
+            if (hasCarousel) {
+                item(key = "home-carousel", contentType = "carousel") {
+                    HomeCarousel(
+                        slider = homeResponse.slider,
+                        imgReferer = homeResponse.imgReferer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(screenHeight * 0.85f),
+                        onPlay = {},
+                        firstCardRequester = firstCardFocusRequester,
+                        onDownPress = {
+                            coroutineScope.launch {
+                                listState.animateScrollToItem(1)
+                                repeat(8) { attempt ->
+                                    val focused = TvFocusManager.requestFocus(firstCardFocusRequester) ||
+                                            TvFocusManager.requestFocus(TvFocusManager.firstCardRequester)
+                                    if (focused) return@launch
+                                    delay(30L * (attempt + 1))
+                                }
+                            }
+                        },
+                        appNavController = appNavController
+                    )
+                }
             }
-        }
-        homeResponse.post.forEachIndexed { index, row ->
-            item(
-                key = row.cate.ifEmpty { "${row.row}_$index" },
-                contentType = row.row
-            ) {
-                HomeMediaRow(
-                    row = row,
-                    rowPosition = index,
-                    hasCarousel = hasCarousel,
-                    horizontalImageTemplate = homeResponse.imageCdnHorizontal ?: homeResponse.imageCdn,
-                    verticalImageTemplate = homeResponse.imageCdnVertical ?: homeResponse.imageCdn,
-                    appNavController = appNavController,
-                    firstCardFocusRequester = if (index == 0) firstCardFocusRequester else null,
-                    onDelete = { deleteId ->
-                        val isWatchlist = row.cate.startsWith("Watchlist", ignoreCase = true) ||
-                                row.cate.contains("Watchlist", ignoreCase = true) ||
-                                row.cate.startsWith("My List", ignoreCase = true) ||
-                                row.cate.contains("My List", ignoreCase = true)
-                        if (isWatchlist) {
-                            viewModel.deleteWatchlistItem(deleteId)
-                        } else {
-                            viewModel.deleteContinueWatchingItem(deleteId)
+
+            validPosts.forEachIndexed { index, row ->
+                item(
+                    key = row.cate.ifEmpty { "${row.row}_$index" },
+                    contentType = row.row
+                ) {
+                    HomeMediaRow(
+                        row = row,
+                        rowPosition = index,
+                        hasCarousel = hasCarousel,
+                        imgReferer = homeResponse.imgReferer,
+                        horizontalImageTemplate = homeResponse.imageCdnHorizontal ?: homeResponse.imageCdn,
+                        verticalImageTemplate = homeResponse.imageCdnVertical ?: homeResponse.imageCdn,
+                        appNavController = appNavController,
+                        firstCardFocusRequester = if (index == 0) firstCardFocusRequester else null,
+                        onFirstCardRequester = if (index == 0) { requester ->
+                            TvFocusManager.firstCardRequester = requester
+                            if (!hasCarousel) {
+                                TvFocusManager.currentScreenContentRequester = requester
+                            }
+                        } else null,
+                        onDelete = { deleteId ->
+                            val isWatchlist = row.cate.startsWith("Watchlist", ignoreCase = true) ||
+                                    row.cate.contains("Watchlist", ignoreCase = true) ||
+                                    row.cate.startsWith("My List", ignoreCase = true) ||
+                                    row.cate.contains("My List", ignoreCase = true)
+                            if (isWatchlist) {
+                                viewModel.deleteWatchlistItem(deleteId)
+                            } else {
+                                viewModel.deleteContinueWatchingItem(deleteId)
+                            }
+                        },
+                        onDeleteLastCard = { rowPos ->
+                            coroutineScope.launch {
+                                if (rowPos > 0) {
+                                    val targetListIndex = if (hasCarousel) rowPos else (rowPos - 1)
+                                    listState.animateScrollToItem(targetListIndex.coerceAtLeast(0))
+                                    repeat(10) { attempt ->
+                                        val requester = TvFocusManager.rowFocusRequesters[rowPos - 1]
+                                        if (requester != null && TvFocusManager.requestFocus(requester)) return@launch
+                                        delay(30L * (attempt + 1))
+                                    }
+                                } else if (hasCarousel) {
+                                    listState.animateScrollToItem(0)
+                                    repeat(10) { attempt ->
+                                        if (TvFocusManager.requestFocus(TvFocusManager.carousel)) return@launch
+                                        delay(30L * (attempt + 1))
+                                    }
+                                } else {
+                                    repeat(10) { attempt ->
+                                        if (TvFocusManager.requestFocus(TvFocusManager.firstCardRequester)) return@launch
+                                        delay(30L * (attempt + 1))
+                                    }
+                                }
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
         }
     }

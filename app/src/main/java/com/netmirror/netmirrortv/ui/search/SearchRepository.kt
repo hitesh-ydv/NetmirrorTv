@@ -16,7 +16,7 @@ class SearchRepository(
     ): SearchResponse? {
 
         val baseUrl = preferences.getBaseUrl()
-        val ott = preferences.getOtt()
+        val ott = com.netmirror.netmirrortv.utils.AppSession.currentOtt().ifBlank { preferences.getOtt() }
 
         if (baseUrl.isEmpty() || ott.isEmpty()) return null
 

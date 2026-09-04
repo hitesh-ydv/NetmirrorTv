@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "netmirror_prefs")
 
@@ -19,6 +22,10 @@ class AppPreferences(
         private val SELECTED_OTT = stringPreferencesKey("selected_ott")
 
     }
+
+    val selectedOttFlow: Flow<String> = context.dataStore.data
+        .map { it[SELECTED_OTT] ?: "nf" }
+        .distinctUntilChanged()
 
     suspend fun saveBaseUrl(url: String) {
 

@@ -6,6 +6,7 @@ data class HomeResponse(
     val status: String = "",
     val slider: List<SliderItem> = emptyList(),
     val post: List<HomePost> = emptyList(),
+    @SerializedName("img_referer") val imgReferer: String? = null,
     @SerializedName("imgcdn") val imageCdn: String? = null,
     @SerializedName("imgcdn_v") val imageCdnVertical: String? = null,
     @SerializedName("imgcdn_h") val imageCdnHorizontal: String? = null,

@@ -49,6 +49,9 @@ data class PlayerResponse(
     @SerializedName("referer")
     val referer: String? = null,
 
+    @SerializedName("img_referer")
+    val imgReferer: String? = null,
+
     @SerializedName("title")
     val title: String? = null,
 
@@ -77,6 +80,10 @@ data class PlayerResponse(
             ?: link?.takeIf { it.isNotBlank() }
             ?: videoUrl?.takeIf { it.isNotBlank() }
             ?: file?.takeIf { it.isNotBlank() }
+
+    val dynamicReferer: String?
+        get() = referer?.takeIf { it.isNotBlank() }
+            ?: imgReferer?.takeIf { it.isNotBlank() }
 
     val displayTitle: String?
         get() {

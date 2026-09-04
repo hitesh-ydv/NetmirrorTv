@@ -55,7 +55,8 @@ private val CARD_HEIGHT = 105.dp
 
 @Composable
 fun OttScreen(
-    viewModel: OttViewModel = viewModel()
+    viewModel: OttViewModel = viewModel(),
+    onNavigateToHome: () -> Unit = {}
 ) {
 
     val loading by viewModel.loading.collectAsState()
@@ -122,6 +123,7 @@ fun OttScreen(
                                 onClick = {
                                     Log.d("OTT", "Clicked: ${item.value}")
                                     viewModel.saveSelectedOtt(item.value)
+                                    onNavigateToHome()
                                 }
                             )
                         }
@@ -220,6 +222,9 @@ private fun OttCard(
                     }
                     else -> false
                 }
+            }
+            .clickable {
+                onClick()
             }
             .focusable()
     ) {

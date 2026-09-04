@@ -18,6 +18,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -25,6 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -33,10 +35,13 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.*
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -48,6 +53,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
@@ -57,9 +63,16 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.netmirror.netmirrortv.ui.home.CardSpacing
+import com.netmirror.netmirrortv.ui.home.LandscapeAspectRatio
+import com.netmirror.netmirrortv.ui.home.PortraitAspectRatio
+import com.netmirror.netmirrortv.ui.home.RowEndPadding
+import com.netmirror.netmirrortv.ui.home.RowStartPadding
+import com.netmirror.netmirrortv.ui.home.calculateCardWidth
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -177,7 +190,7 @@ fun DetailsScreen(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun DetailsContent(
     data: TitleDetailsResponse,
@@ -261,6 +274,16 @@ private fun DetailsContent(
     val playFocusRequester = remember { FocusRequester() }
     val addFocusRequester = remember { FocusRequester() }
 
+    TvFocusManager.currentScreenContentRequester = playFocusRequester
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (TvFocusManager.currentScreenContentRequester == playFocusRequester) {
+                TvFocusManager.currentScreenContentRequester = null
+            }
+        }
+    }
+
     val ott = com.netmirror.netmirrortv.utils.AppSession.currentOtt().ifBlank { data.ott.orEmpty() }
     val videoId = if (data.type == "t") "SE_${data.main_id}" else data.main_id
     var isInWatchlist by remember(data.main_id, ott) {
@@ -278,7 +301,7 @@ private fun DetailsContent(
     // Ambient used by the outer page Column's verticalScroll. Defaults to NoOp so
     // that hero/tab focus changes don't fight our manual scrollState.animateScrollTo(...)
     // jumps (down-key -> episodes, back-to-top, etc). Episode rows flip this to
-    // `defaultBringIntoViewSpec` while focus is among them, then flip it back on exit.
+    // `episodesBringIntoViewSpec` while focus is among them, then flip it back on exit.
     var pageBringIntoViewSpec by remember { mutableStateOf<BringIntoViewSpec>(NoOpBringIntoViewSpec) }
     // Prevents the initial focus request from triggering a scroll animation — only real user focus navigation should scroll.
     var hasInitializedFocus by remember { mutableStateOf(false) }
@@ -288,10 +311,25 @@ private fun DetailsContent(
         val density = LocalDensity.current
         val screenHeightPx = with(density) { screenHeight.roundToPx() }
 
+        val episodesBringIntoViewSpec = remember(screenHeightPx, scrollState) {
+            object : BringIntoViewSpec {
+                override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+                    val itemCenter = offset + size / 2f
+                    val containerCenter = containerSize / 2f
+                    val desiredDelta = itemCenter - containerCenter
+                    // Prevent scrolling above screenHeightPx so content above tabs never peeks through
+                    val minAllowedDelta = (screenHeightPx - scrollState.value).toFloat()
+                    return desiredDelta.coerceAtLeast(minAllowedDelta)
+                }
+            }
+        }
+
         CompositionLocalProvider(LocalBringIntoViewSpec provides pageBringIntoViewSpec) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .focusGroup()
+                    .focusRestorer { playFocusRequester }
                     .verticalScroll(scrollState)
             ) {
 
@@ -305,15 +343,23 @@ private fun DetailsContent(
                     // Background Poster
                     // ===========================
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(data.posterUrl)
-                            .crossfade(true)
-                            .build(),
+                        model = remember(data.posterUrl, data.img_referer) {
+                            ImageRequest.Builder(context)
+                                .data(data.posterUrl)
+                                .apply {
+                                    val referer = data.img_referer
+                                    if (!referer.isNullOrBlank()) {
+                                        setHeader("Referer", referer)
+                                    }
+                                    setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                }
+                                .crossfade(true)
+                                .build()
+                        },
                         contentDescription = data.title,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxSize()
-                            .blur(12.dp)
                     )
 
                     // Horizontal Gradient
@@ -371,11 +417,25 @@ private fun DetailsContent(
                         // OTT Logo
                         data.ott_logo?.logo?.let { logoUrl ->
                             AsyncImage(
-                                model = logoUrl,
+                                model = remember(logoUrl, data.img_referer) {
+                                    ImageRequest.Builder(context)
+                                        .data(logoUrl)
+                                        .apply {
+                                            val referer = data.img_referer
+                                            if (!referer.isNullOrBlank()) {
+                                                setHeader("Referer", referer)
+                                            }
+                                            setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                        }
+                                        .crossfade(true)
+                                        .build()
+                                },
                                 contentDescription = data.ott,
                                 modifier = Modifier
-                                    .height(38.dp)
-                                    .padding(bottom = 19.dp),
+                                    .widthIn(max = 120.dp)
+                                    .heightIn(max = 60.dp)
+                                    .padding(bottom = 19.dp)
+                                ,
                                 contentScale = ContentScale.Fit
                             )
                         }
@@ -499,10 +559,17 @@ private fun DetailsContent(
                     },
                     onEpisodesFocusChanged = { hasFocus ->
                         // While focus is among episode rows, let the outer page
-                        // scroll naturally to bring focused episode rows into view;
+                        // scroll with episodesBringIntoViewSpec to center focused episode rows vertically
+                        // without scrolling above screenHeightPx (preventing hero content above tabs from showing);
                         // otherwise keep it NoOp'd so it doesn't fight the manual jumps above.
                         pageBringIntoViewSpec =
-                            if (hasFocus) defaultBringIntoViewSpec else NoOpBringIntoViewSpec
+                            if (hasFocus) episodesBringIntoViewSpec else NoOpBringIntoViewSpec
+                    },
+                    onMoreAboutFocusChanged = { hasFocus ->
+                        // While focus is among more about items, center them vertically
+                        // without scrolling above screenHeightPx
+                        pageBringIntoViewSpec =
+                            if (hasFocus) episodesBringIntoViewSpec else NoOpBringIntoViewSpec
                     }
                 )
 
@@ -832,7 +899,7 @@ private fun AddButton(
 private enum class DetailsTab(val label: String) {
     EPISODES("Episodes"),
     MORE_LIKE_THIS("More Like This"),
-    MORE_ABOUT("More About")
+    MORE_ABOUT("More Details")
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -847,7 +914,8 @@ private fun DetailsTabsSection(
     onEpisodeClick: (Episode) -> Unit = {},
     onSuggestionClick: (String) -> Unit = {},
     onTabsFocused: () -> Unit = {},
-    onEpisodesFocusChanged: (Boolean) -> Unit = {}
+    onEpisodesFocusChanged: (Boolean) -> Unit = {},
+    onMoreAboutFocusChanged: (Boolean) -> Unit = {}
 ) {
     val isSeries = data.type == "t"
 
@@ -860,7 +928,7 @@ private fun DetailsTabsSection(
     }
 
     val tabFocusRequesters = remember(tabs) { tabs.map { FocusRequester() } }
-    var selectedTab by remember(isSeries) { mutableStateOf(tabs.first()) }
+    var selectedTab by rememberSaveable(isSeries) { mutableStateOf(tabs.first()) }
 
     Column(
         modifier = Modifier
@@ -868,6 +936,7 @@ private fun DetailsTabsSection(
             .defaultMinSize(minHeight = minHeight)
             .background(Color.Black)
             .padding(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 16.dp)
+            .focusGroup()
             .onFocusChanged { state ->
                 if (state.hasFocus) onTabsFocused()
             }
@@ -899,22 +968,18 @@ private fun DetailsTabsSection(
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        val moreAboutTabIndex = tabs.indexOf(DetailsTab.MORE_ABOUT).coerceAtLeast(0)
+        val moreAboutTabRequester = tabFocusRequesters.getOrElse(moreAboutTabIndex) { remember { FocusRequester() } }
+
         // ---- Tab Content ----
         when (selectedTab) {
             DetailsTab.EPISODES -> EpisodesTabContent(
                 data = data,
                 episodesState = episodesState,
+                tabFocusRequester = tabFocusRequesters.firstOrNull() ?: remember { FocusRequester() },
                 onSeasonSelected = onSeasonSelected,
                 onLoadMore = onLoadMoreEpisodes,
                 defaultBringIntoViewSpec = defaultBringIntoViewSpec,
-                onUpToTabs = {
-                    val epTabReq = tabFocusRequesters.firstOrNull()
-                    if (epTabReq != null) {
-                        TvFocusManager.requestFocus(epTabReq)
-                    } else {
-                        false
-                    }
-                },
                 onEpisodeClick = onEpisodeClick,
                 onEpisodesFocusChanged = onEpisodesFocusChanged
             )
@@ -923,7 +988,11 @@ private fun DetailsTabsSection(
                 defaultBringIntoViewSpec = defaultBringIntoViewSpec,
                 onCardClick = onSuggestionClick
             )
-            DetailsTab.MORE_ABOUT -> MoreAboutTabContent(data)
+            DetailsTab.MORE_ABOUT -> MoreAboutTabContent(
+                data = data,
+                tabFocusRequester = moreAboutTabRequester,
+                onFocusChanged = onMoreAboutFocusChanged
+            )
         }
     }
 }
@@ -1012,10 +1081,10 @@ private fun episodePosterUrl(template: String?, episodeId: String): String? =
 private fun EpisodesTabContent(
     data: TitleDetailsResponse,
     episodesState: EpisodesUiState,
+    tabFocusRequester: FocusRequester,
     onSeasonSelected: (String) -> Unit,
     onLoadMore: () -> Unit,
     defaultBringIntoViewSpec: BringIntoViewSpec,
-    onUpToTabs: () -> Boolean = { false },
     onEpisodeClick: (Episode) -> Unit = {},
     onEpisodesFocusChanged: (Boolean) -> Unit = {}
 ) {
@@ -1044,12 +1113,43 @@ private fun EpisodesTabContent(
     var lastFocusedSeasonIndex by remember(seasons) { mutableIntStateOf(selectedSeasonIndex) }
     var lastFocusedEpisodeIndex by remember(episodesState.seasonId) { mutableIntStateOf(0) }
     var shouldFocusFirstEpisodeOnLoad by remember { mutableStateOf(false) }
+    var targetFocusEpisodeIndex by remember { mutableStateOf<Int?>(null) }
 
-    LaunchedEffect(episodesState.episodes, episodesState.isLoadingSeason) {
+    val currentSeasonFocusRequester = remember(seasonFocusRequesters, lastFocusedSeasonIndex, selectedSeasonIndex) {
+        seasonFocusRequesters.getOrNull(lastFocusedSeasonIndex)
+            ?: seasonFocusRequesters.getOrNull(selectedSeasonIndex)
+            ?: seasonFocusRequesters.firstOrNull()
+            ?: FocusRequester.Default
+    }
+
+    val currentEpisodeFocusRequester = remember(episodeFocusRequesters, lastFocusedEpisodeIndex) {
+        val targetIndex = lastFocusedEpisodeIndex.coerceIn(0, (episodeFocusRequesters.size - 1).coerceAtLeast(0))
+        episodeFocusRequesters.getOrNull(targetIndex)
+            ?: episodeFocusRequesters.firstOrNull()
+            ?: FocusRequester.Default
+    }
+
+    LaunchedEffect(episodesState.episodes, episodesState.isLoadingSeason, episodesState.isLoadingMore) {
         if (shouldFocusFirstEpisodeOnLoad && !episodesState.isLoadingSeason && episodesState.episodes.isNotEmpty()) {
             shouldFocusFirstEpisodeOnLoad = false
-            episodeFocusRequesters.firstOrNull()?.let {
-                TvFocusManager.requestFocus(it)
+            episodeFocusRequesters.firstOrNull()?.let { req ->
+                if (!TvFocusManager.requestFocus(req)) {
+                    delay(50)
+                    TvFocusManager.requestFocus(req)
+                }
+            }
+        }
+        val targetIndex = targetFocusEpisodeIndex
+        if (targetIndex != null && !episodesState.isLoadingMore) {
+            targetFocusEpisodeIndex = null
+            val targetReq = episodeFocusRequesters.getOrNull(targetIndex)
+                ?: episodeFocusRequesters.lastOrNull()
+            if (targetReq != null) {
+                lastFocusedEpisodeIndex = targetIndex.coerceIn(0, episodeFocusRequesters.lastIndex)
+                if (!TvFocusManager.requestFocus(targetReq)) {
+                    delay(50)
+                    TvFocusManager.requestFocus(targetReq)
+                }
             }
         }
     }
@@ -1064,21 +1164,14 @@ private fun EpisodesTabContent(
                 seasons = seasons,
                 selectedSeasonId = episodesState.seasonId,
                 seasonFocusRequesters = seasonFocusRequesters,
-                onUpKeyDown = onUpToTabs,
-                onDownKeyDown = {
-                    val targetIndex = lastFocusedEpisodeIndex.coerceIn(0, (episodeFocusRequesters.size - 1).coerceAtLeast(0))
-                    val targetEpRequester = episodeFocusRequesters.getOrNull(targetIndex) ?: episodeFocusRequesters.firstOrNull()
-                    if (targetEpRequester != null) {
-                        TvFocusManager.requestFocus(targetEpRequester)
-                    } else {
-                        false
-                    }
-                },
+                tabFocusRequester = tabFocusRequester,
+                targetEpisodeFocusRequester = currentEpisodeFocusRequester,
                 onSeasonFocused = { index ->
                     lastFocusedSeasonIndex = index
                 },
                 onSeasonSelected = { season ->
                     shouldFocusFirstEpisodeOnLoad = true
+                    targetFocusEpisodeIndex = null
                     lastFocusedEpisodeIndex = 0
                     onSeasonSelected(season.id)
                 }
@@ -1123,34 +1216,18 @@ private fun EpisodesTabContent(
                             horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     episodesState.episodes.forEachIndexed { index, episode ->
+                        val isFirst = index == 0
+                        val isLast = index == episodesState.episodes.lastIndex
                         EpisodeRow(
                             episode = episode,
                             posterTemplate = data.ep_poster,
+                            imgReferer = data.img_referer,
                             episodeIndex = index + 1,
                             focusRequester = episodeFocusRequesters.getOrElse(index) { remember { FocusRequester() } },
-                            isFirstEpisode = index == 0,
-                            isLastEpisode = index == episodesState.episodes.lastIndex && episodesState.hasMore,
-                            onUpKeyDown = {
-                                if (seasons.isNotEmpty()) {
-                                    val targetSeasonReq = seasonFocusRequesters.getOrNull(lastFocusedSeasonIndex)
-                                        ?: seasonFocusRequesters.getOrNull(selectedSeasonIndex)
-                                        ?: seasonFocusRequesters.firstOrNull()
-                                    if (targetSeasonReq != null) {
-                                        TvFocusManager.requestFocus(targetSeasonReq)
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    onUpToTabs()
-                                }
-                            },
-                            onDownKeyDown = {
-                                if (episodesState.hasMore) {
-                                    TvFocusManager.requestFocus(loadMoreFocusRequester)
-                                } else {
-                                    false
-                                }
-                            },
+                            isFirstEpisode = isFirst,
+                            isLastEpisode = isLast,
+                            upFocusRequester = if (seasons.isNotEmpty()) currentSeasonFocusRequester else tabFocusRequester,
+                            downFocusRequester = if (episodesState.hasMore) loadMoreFocusRequester else FocusRequester.Cancel,
                             onFocused = {
                                 lastFocusedEpisodeIndex = index
                             },
@@ -1162,15 +1239,12 @@ private fun EpisodesTabContent(
                         LoadMoreRow(
                             isLoading = episodesState.isLoadingMore,
                             focusRequester = loadMoreFocusRequester,
-                            onUpKeyDown = {
-                                val lastEpRequester = episodeFocusRequesters.lastOrNull()
-                                if (lastEpRequester != null) {
-                                    TvFocusManager.requestFocus(lastEpRequester)
-                                } else {
-                                    false
-                                }
-                            },
-                            onClick = onLoadMore
+                            upFocusRequester = episodeFocusRequesters.lastOrNull() ?: FocusRequester.Default,
+                            downFocusRequester = FocusRequester.Cancel,
+                            onClick = {
+                                targetFocusEpisodeIndex = episodesState.episodes.size
+                                onLoadMore()
+                            }
                         )
                     }
                 }
@@ -1183,35 +1257,50 @@ private fun EpisodesTabContent(
 private fun LoadMoreRow(
     isLoading: Boolean,
     focusRequester: FocusRequester = remember { FocusRequester() },
-    onUpKeyDown: () -> Boolean = { false },
+    upFocusRequester: FocusRequester = FocusRequester.Default,
+    downFocusRequester: FocusRequester = FocusRequester.Cancel,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) bringIntoViewRequester.bringIntoView()
+    }
+
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused) 1.02f else 1f,
+        animationSpec = tween(180),
+        label = "loadMoreScale"
+    )
 
     val backgroundColor = if (isFocused) Color.White else Color.White.copy(alpha = 0.10f)
     val textColor = if (isFocused) Color.Black else Color.White.copy(alpha = 0.85f)
+    val borderColor = if (isFocused) Color.White.copy(alpha = 0.8f) else Color.Transparent
 
     Box(
         modifier = Modifier
+            .fillMaxWidth(0.8f)
+            .padding(top = 8.dp)
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .focusProperties {
+                up = upFocusRequester
+                down = downFocusRequester
+            }
             .focusRequester(focusRequester)
-//            .onPreviewKeyEvent { event ->
-//                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-//                    onUpKeyDown()
-//                } else {
-//                    false
-//                }
-//            }
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
-                enabled = !isLoading,
-                onClick = onClick
+                onClick = {
+                    if (!isLoading) {
+                        onClick()
+                    }
+                }
             )
-            .fillMaxWidth(0.8f)
-            .padding(top = 4.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(backgroundColor)
+            .border(2.dp, borderColor, RoundedCornerShape(10.dp))
             .padding(vertical = 14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -1238,32 +1327,32 @@ private fun SeasonSelectorRow(
     seasons: List<Season>,
     selectedSeasonId: String?,
     seasonFocusRequesters: List<FocusRequester>,
-    onUpKeyDown: () -> Boolean = { false },
-    onDownKeyDown: () -> Boolean = { false },
+    tabFocusRequester: FocusRequester = FocusRequester.Default,
+    targetEpisodeFocusRequester: FocusRequester = FocusRequester.Default,
     onSeasonFocused: (Int) -> Unit = {},
     onSeasonSelected: (Season) -> Unit
 ) {
     val scrollState = rememberScrollState()
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(scrollState)
-            .focusGroup()
-            .focusRestorer(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        seasons.forEachIndexed { index, season ->
-            SeasonChip(
-                text = season.s.takeIf { !it.isNullOrBlank() } ?: "Season ${index + 1}",
-                selected = season.id == selectedSeasonId,
-                focusRequester = seasonFocusRequesters.getOrElse(index) { remember { FocusRequester() } },
-                onUpKeyDown = onUpKeyDown,
-                onDownKeyDown = onDownKeyDown,
-                onFocused = { onSeasonFocused(index) },
-                onClick = { onSeasonSelected(season) }
-            )
+    CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(scrollState),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            seasons.forEachIndexed { index, season ->
+                SeasonChip(
+                    text = season.s.takeIf { !it.isNullOrBlank() } ?: "Season ${index + 1}",
+                    selected = season.id == selectedSeasonId,
+                    focusRequester = seasonFocusRequesters.getOrElse(index) { remember { FocusRequester() } },
+                    tabFocusRequester = tabFocusRequester,
+                    targetEpisodeFocusRequester = targetEpisodeFocusRequester,
+                    onFocused = { onSeasonFocused(index) },
+                    onClick = { onSeasonSelected(season) }
+                )
+            }
         }
     }
 }
@@ -1274,8 +1363,8 @@ private fun SeasonChip(
     text: String,
     selected: Boolean,
     focusRequester: FocusRequester = remember { FocusRequester() },
-    onUpKeyDown: () -> Boolean = { false },
-    onDownKeyDown: () -> Boolean = { false },
+    tabFocusRequester: FocusRequester = FocusRequester.Default,
+    targetEpisodeFocusRequester: FocusRequester = FocusRequester.Default,
     onFocused: () -> Unit = {},
     onClick: () -> Unit
 ) {
@@ -1308,19 +1397,14 @@ private fun SeasonChip(
     Box(
         modifier = Modifier
             .bringIntoViewRequester(bringIntoViewRequester)
+            .focusProperties {
+                up = tabFocusRequester
+                down = targetEpisodeFocusRequester
+            }
             .focusRequester(focusRequester)
             .onFocusChanged {
                 if (it.isFocused) {
                     onFocused()
-                }
-            }
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
-                    onDownKeyDown()
-                } else if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-                    onUpKeyDown()
-                } else {
-                    false
                 }
             }
             .clickable(
@@ -1346,12 +1430,13 @@ private fun SeasonChip(
 private fun EpisodeRow(
     episode: Episode,
     posterTemplate: String?,
+    imgReferer: String? = null,
     episodeIndex: Int,
     focusRequester: FocusRequester = remember { FocusRequester() },
     isFirstEpisode: Boolean = false,
     isLastEpisode: Boolean = false,
-    onUpKeyDown: () -> Boolean = { false },
-    onDownKeyDown: () -> Boolean = { false },
+    upFocusRequester: FocusRequester = FocusRequester.Default,
+    downFocusRequester: FocusRequester = FocusRequester.Default,
     onFocused: () -> Unit = {},
     onClick: () -> Unit
 ) {
@@ -1394,19 +1479,18 @@ private fun EpisodeRow(
         modifier = Modifier
             .fillMaxWidth(0.8f)
             .bringIntoViewRequester(bringIntoViewRequester)
+            .focusProperties {
+                if (isFirstEpisode) {
+                    up = upFocusRequester
+                }
+                if (isLastEpisode) {
+                    down = downFocusRequester
+                }
+            }
             .focusRequester(focusRequester)
             .onFocusChanged {
                 if (it.isFocused) {
                     onFocused()
-                }
-            }
-            .onPreviewKeyEvent { event ->
-                if (isFirstEpisode && event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-                    onUpKeyDown()
-                } else if (isLastEpisode && event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
-                    onDownKeyDown()
-                } else {
-                    false
                 }
             }
             .clickable(
@@ -1417,9 +1501,10 @@ private fun EpisodeRow(
             .clip(RoundedCornerShape(10.dp))
             .background(backgroundColor)
             .border(2.dp, borderColor, RoundedCornerShape(10.dp))
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Spacer(modifier = Modifier.width(12.dp))
         // Episode Number (large, left-aligned)
         Text(
             text = epNumText,
@@ -1434,15 +1519,23 @@ private fun EpisodeRow(
         // Thumbnail with watched progress bar
         Box(
             modifier = Modifier
-                .size(width = 135.dp, height = 76.dp)
+                .size(width = 180.dp, height = 100.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .background(Color.White.copy(alpha = 0.12f))
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(posterUrl)
-                    .crossfade(true)
-                    .build(),
+                model = remember(posterUrl, imgReferer) {
+                    ImageRequest.Builder(context)
+                        .data(posterUrl)
+                        .apply {
+                            if (!imgReferer.isNullOrBlank()) {
+                                setHeader("Referer", imgReferer)
+                            }
+                            setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                        }
+                        .crossfade(true)
+                        .build()
+                },
                 contentDescription = episode.t,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -1468,7 +1561,7 @@ private fun EpisodeRow(
 
         Spacer(modifier = Modifier.width(20.dp))
 
-        // Episode Title, Duration, and Description
+        // Episode Title, Info, and Description
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.Center
@@ -1481,30 +1574,47 @@ private fun EpisodeRow(
                 Text(
                     text = episode.t.orEmpty(),
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
+            }
 
-                if (!durationText.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = durationText,
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+            val infoList = remember(episode.info) {
+                episode.info.orEmpty().filter { !it.isNullOrBlank() }
+            }
+            if (infoList.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    infoList.forEachIndexed { idx, item ->
+                        if (idx > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .background(Color(0xFFE50914), shape = CircleShape)
+                            )
+                        }
+                        Text(
+                            text = item,
+                            color = Color.White.copy(alpha = 0.80f),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
 
             episode.ep_desc?.takeIf { it.isNotBlank() }?.let { desc ->
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = desc,
                     color = Color.White.copy(alpha = 0.70f),
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     lineHeight = 18.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
@@ -1518,6 +1628,18 @@ private val POSTER_PLACEHOLDER = Regex("-{3,}")
 
 private fun resolveCardImageUrl(template: String?, id: String): String =
     template?.replace(POSTER_PLACEHOLDER, id).orEmpty()
+
+private const val MoreLikeLandscapeFullCardsCount = 4
+private const val MoreLikePortraitFullCardsCount = 5
+private const val MoreLikeCardPeekFraction = 0.25f
+
+private fun calculateMoreLikeCardWidth(availableWidth: Dp, isPortrait: Boolean): Dp {
+    val fullCardsCount = if (isPortrait) MoreLikePortraitFullCardsCount else MoreLikeLandscapeFullCardsCount
+    val effectiveCount = fullCardsCount + MoreLikeCardPeekFraction
+    val totalSpacing = (CardSpacing * fullCardsCount) + RowStartPadding
+    val computedWidth = (availableWidth - totalSpacing) / effectiveCount
+    return computedWidth.coerceAtLeast(80.dp)
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1540,8 +1662,6 @@ private fun MoreLikeThisTabContent(
 
     // Check 'v' (vertical / portrait) vs 'h' (horizontal / landscape) matching HomeMediaRows
     val isPortrait = data.row.equals("v", ignoreCase = true)
-    val cardWidth = if (isPortrait) 150.dp else 200.dp
-    val aspectRatio = if (isPortrait) 2f / 3f else 16f / 9f
 
     // Prefer morelike_poster, fallback to main_poster (vertical) or ep_poster (horizontal)
     val imageTemplate = when {
@@ -1551,25 +1671,49 @@ private fun MoreLikeThisTabContent(
     }
 
     val cardFocusRequesters = remember(suggestions) { suggestions.map { FocusRequester() } }
+    val rowState = rememberLazyListState()
+    val density = LocalDensity.current
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val fallbackAvailableWidth = screenWidth - 96.dp
 
-    CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
-        LazyRow(
-            modifier = Modifier.padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(start = 7.dp, end = 10.dp),
-        ) {
-            itemsIndexed(
-                items = suggestions,
-                key = { index, item -> "${item.id}_$index" }
-            ) { index, item ->
-                MoreLikeThisCard(
-                    id = item.id,
-                    imageTemplate = imageTemplate,
-                    cardWidth = cardWidth,
-                    aspectRatio = aspectRatio,
-                    focusRequester = cardFocusRequesters.getOrElse(index) { remember { FocusRequester() } },
-                    onClick = { onCardClick(item.id) }
-                )
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val availableWidth = if (maxWidth > 0.dp && maxWidth != Dp.Infinity) {
+            maxWidth
+        } else {
+            fallbackAvailableWidth
+        }
+        val cardWidth = remember(availableWidth, isPortrait) { calculateMoreLikeCardWidth(availableWidth, isPortrait) }
+        val aspectRatioValue = if (isPortrait) PortraitAspectRatio else LandscapeAspectRatio
+        val widthPx = remember(cardWidth, density) { with(density) { cardWidth.toPx() }.toInt() }
+        val heightPx = remember(widthPx, aspectRatioValue) { (widthPx / aspectRatioValue).toInt() }
+
+        CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
+            LazyRow(
+                state = rowState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .focusGroup()
+                    .focusRestorer(),
+                horizontalArrangement = Arrangement.spacedBy(CardSpacing),
+                contentPadding = PaddingValues(start = RowStartPadding, end = RowEndPadding),
+            ) {
+                itemsIndexed(
+                    items = suggestions,
+                    key = { index, item -> "${item.id}_$index" }
+                ) { index, item ->
+                    MoreLikeThisCard(
+                        id = item.id,
+                        imageTemplate = imageTemplate,
+                        imgReferer = data.img_referer,
+                        cardWidth = cardWidth,
+                        aspectRatio = aspectRatioValue,
+                        widthPx = widthPx,
+                        heightPx = heightPx,
+                        focusRequester = cardFocusRequesters.getOrElse(index) { remember { FocusRequester() } },
+                        onClick = { onCardClick(item.id) }
+                    )
+                }
             }
         }
     }
@@ -1579,11 +1723,15 @@ private fun MoreLikeThisTabContent(
 private fun MoreLikeThisCard(
     id: String,
     imageTemplate: String,
-    cardWidth: androidx.compose.ui.unit.Dp,
+    imgReferer: String? = null,
+    cardWidth: Dp,
     aspectRatio: Float,
+    widthPx: Int = 0,
+    heightPx: Int = 0,
     focusRequester: FocusRequester = remember { FocusRequester() },
     onClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val bringIntoViewRequester = remember { BringIntoViewRequester() }
@@ -1622,18 +1770,31 @@ private fun MoreLikeThisCard(
                 scaleY = scale
             }
             .clip(cardShape)
-            .background(if (isFocused) Color(0xFF303030) else Color(0xFF202020))
+            .background(if (isFocused) Color(0xFF262626) else Color(0xFF1A1A1A))
             .border(
                 width = 3.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
+                color = if (isFocused) Color(0xFFE50914) else Color.Transparent,
                 shape = cardShape
             )
     ) {
         AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(posterUrl)
-                .crossfade(true)
-                .build(),
+            model = remember(posterUrl, widthPx, heightPx, imgReferer) {
+                ImageRequest.Builder(context)
+                    .data(posterUrl)
+                    .apply {
+                        if (widthPx > 0 && heightPx > 0) {
+                            size(coil.size.Size(widthPx, heightPx))
+                            precision(coil.size.Precision.INEXACT)
+                            allowRgb565(true)
+                        }
+                        if (!imgReferer.isNullOrBlank()) {
+                            setHeader("Referer", imgReferer)
+                        }
+                        setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                    }
+                    .crossfade(true)
+                    .build()
+            },
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -1641,55 +1802,107 @@ private fun MoreLikeThisCard(
     }
 }
 
-// ---------------------------------------------------------
-// More About Tab
-// ---------------------------------------------------------
 @Composable
-private fun MoreAboutTabContent(data: TitleDetailsResponse) {
+private fun MoreAboutTabContent(
+    data: TitleDetailsResponse,
+    tabFocusRequester: FocusRequester = FocusRequester.Default,
+    onFocusChanged: (Boolean) -> Unit = {}
+) {
     val details = data.moredetails.orEmpty()
 
     if (details.isEmpty()) {
         Text(
             text = "No additional details available.",
             color = Color.White.copy(alpha = 0.6f),
-            fontSize = 14.sp,
+            fontSize = 16.sp,
             modifier = Modifier.padding(vertical = 24.dp)
         )
         return
     }
 
+    val itemFocusRequesters = remember(details) { details.map { FocusRequester() } }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp)
+            .padding(vertical = 12.dp)
+            .onFocusChanged { onFocusChanged(it.hasFocus) },
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        details.forEach { detail ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp)
-            ) {
-                Text(
-                    text = detail.k,
-                    color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.width(160.dp)
-                )
-                Text(
-                    text = detail.v,
-                    color = Color.White.copy(alpha = 0.92f),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(Color.White.copy(alpha = 0.08f))
+        details.forEachIndexed { index, detail ->
+            val isFirst = index == 0
+            val isLast = index == details.lastIndex
+            val focusRequester = itemFocusRequesters.getOrElse(index) { remember { FocusRequester() } }
+
+            DetailItemBlock(
+                label = detail.k,
+                value = detail.v,
+                focusRequester = focusRequester,
+                isFirst = isFirst,
+                isLast = isLast,
+                tabFocusRequester = tabFocusRequester
             )
         }
+    }
+}
+
+@Composable
+private fun DetailItemBlock(
+    label: String,
+    value: String,
+    focusRequester: FocusRequester,
+    isFirst: Boolean,
+    isLast: Boolean,
+    tabFocusRequester: FocusRequester
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) bringIntoViewRequester.bringIntoView()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .focusProperties {
+                if (isFirst) {
+                    up = tabFocusRequester
+                }
+                if (isLast) {
+                    down = FocusRequester.Cancel
+                }
+            }
+            .focusRequester(focusRequester)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = {}
+            )
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isFocused) Color.White.copy(alpha = 0.08f) else Color.Transparent)
+            .border(
+                width = 2.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.5f) else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (isFocused) Color.White else Color.Gray,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = value,
+            color = if (isFocused) Color.White else Color.White.copy(alpha = 0.95f),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal,
+            lineHeight = 26.sp
+        )
     }
 }

@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -13,7 +14,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,7 +45,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,12 +57,14 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -119,6 +126,8 @@ private val DRAWER_SCRIM_BRUSH = Brush.horizontalGradient(
 fun AppModalNavigationDrawer(
     selectedIndex: Int,
     onItemSelected: (Int) -> Unit,
+    onAccountClick: () -> Unit = {},
+    isAccountDialogOpen: Boolean = false,
     content: @Composable () -> Unit,
 ) {
 
@@ -144,26 +153,40 @@ fun AppModalNavigationDrawer(
     // drawer container itself). Compose propagates `hasFocus` up to any
     // ancestor of a focused node, so this flips to false the moment focus
     // moves out to the carousel/content, and back to true on D-pad LEFT.
-    val hasActiveContentFocus = TvFocusManager.lastFocusedHomeCardId != null ||
-            TvFocusManager.isCarouselLastFocused ||
-            TvFocusManager.lastFocusedSearchCardId != null
+    val hasActiveContentFocus = TvFocusManager.hasSavedContentFocus()
 
     var drawerHasFocus by remember { mutableStateOf(!hasActiveContentFocus) }
+    var isAccountFocused by remember { mutableStateOf(false) }
+    val isDrawerExpanded = drawerHasFocus && !isAccountFocused
 
     val drawerWidth by animateDpAsState(
-        targetValue = if (drawerHasFocus) DRAWER_WIDTH_EXPANDED else DRAWER_WIDTH_COLLAPSED,
+        targetValue = if (isDrawerExpanded) DRAWER_WIDTH_EXPANDED else DRAWER_WIDTH_COLLAPSED,
         animationSpec = tween(DRAWER_ANIM_DURATION, easing = DRAWER_ANIM_EASING),
         label = "drawerWidth"
     )
+
+    val coroutineScope = rememberCoroutineScope()
+
+    // Ensure initial focus is on Home tab (index 0) on launch
+    LaunchedEffect(Unit) {
+        repeat(12) { attempt ->
+            val hasSavedContentFocus = TvFocusManager.hasSavedContentFocus()
+            if (hasSavedContentFocus) return@LaunchedEffect
+            val requester = focusRequesters.getOrNull(0)
+            if (requester != null) {
+                val focused = runCatching { requester.requestFocus() }.getOrDefault(false)
+                if (focused) return@LaunchedEffect
+            }
+            delay(50L * (attempt + 1))
+        }
+    }
 
     // FOCUS FIX:
     // Only request focus into the drawer if the content area doesn't have an active/saved target.
     LaunchedEffect(selectedItemIndex, focusRequesters) {
         TvFocusManager.drawerRequesters = focusRequesters
         TvFocusManager.selectedDrawerRequester = focusRequesters.getOrNull(selectedItemIndex)
-        val hasSavedContentFocus = TvFocusManager.lastFocusedHomeCardId != null ||
-                TvFocusManager.isCarouselLastFocused ||
-                TvFocusManager.lastFocusedSearchCardId != null
+        val hasSavedContentFocus = TvFocusManager.hasSavedContentFocus()
         if (!hasSavedContentFocus) {
             repeat(5) { attempt ->
                 val focused = runCatching { focusRequesters[selectedItemIndex].requestFocus() }
@@ -175,12 +198,9 @@ fun AppModalNavigationDrawer(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-
         // Content sits underneath the drawer.
         content()
-
-        DrawerScrim(visible = drawerHasFocus)
-
+        DrawerScrim(visible = isDrawerExpanded)
         // The drawer itself — plain Column, fully custom + animated width.
         Column(
             modifier = Modifier
@@ -199,9 +219,7 @@ fun AppModalNavigationDrawer(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            Column(
-                modifier = Modifier.focusRestorer(focusRequesters[selectedItemIndex])
-            ) {
+            Column {
 
                 visibleDrawerItems.forEach { item ->
                     val originalIndex = appNavDrawerItems.indexOf(item)
@@ -209,7 +227,7 @@ fun AppModalNavigationDrawer(
                     CustomNavDrawerItem(
                         item = item,
                         selected = selectedItemIndex == originalIndex,
-                        showLabel = drawerHasFocus,
+                        showLabel = isDrawerExpanded,
                         onClick = {
                             onItemSelected(originalIndex)
                         },
@@ -223,8 +241,15 @@ fun AppModalNavigationDrawer(
                             }
                             .onPreviewKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
-                                    TvFocusManager.moveFocusToContent()
-                                    true  // always consume Right key to prevent default navigation
+                                    if (!TvFocusManager.moveFocusToContent()) {
+                                        coroutineScope.launch {
+                                            repeat(12) { attempt ->
+                                                if (TvFocusManager.moveFocusToContent()) return@launch
+                                                delay(25L * (attempt + 1))
+                                            }
+                                        }
+                                    }
+                                    true
                                 } else {
                                     false
                                 }
@@ -238,7 +263,12 @@ fun AppModalNavigationDrawer(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            DrawerLogo(url = navbar?.acc_logo)
+            DrawerAccountLogo(
+                url = navbar?.acc_logo,
+                isAccountActive = isAccountDialogOpen,
+                onFocusChanged = { isAccountFocused = it },
+                onClick = onAccountClick
+            )
 
         }
 
@@ -303,6 +333,115 @@ private fun DrawerLogo(url: String?) {
                     color = if (isLoaded) Color.Transparent else DRAWER_LOGO_PLACEHOLDER_COLOR,
                     shape = DRAWER_LOGO_SHAPE,
                 )
+        )
+    }
+}
+
+/**
+ * Focusable Account Logo with corner radius, D-pad navigation, and visual feedback.
+ */
+@Composable
+private fun DrawerAccountLogo(
+    url: String?,
+    isAccountActive: Boolean = false,
+    onFocusChanged: (Boolean) -> Unit = {},
+    onClick: () -> Unit
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val accountRequester = remember { FocusRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(accountRequester) {
+        TvFocusManager.accountDrawerRequester = accountRequester
+    }
+
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused) 1.15f else 1f,
+        animationSpec = tween(DRAWER_ANIM_DURATION),
+        label = "accountLogoScale"
+    )
+
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            isFocused -> Color.White
+            isAccountActive -> Color(0xFFE50914)
+            else -> Color.Transparent
+        },
+        animationSpec = tween(DRAWER_FOCUS_ANIM_DURATION),
+        label = "accountLogoBorder"
+    )
+
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            isFocused -> Color.White.copy(alpha = 0.22f)
+            isAccountActive -> Color(0xFFE50914).copy(alpha = 0.20f)
+            else -> Color.Transparent
+        },
+        animationSpec = tween(DRAWER_FOCUS_ANIM_DURATION),
+        label = "accountLogoBg"
+    )
+
+    val shape = RoundedCornerShape(3.dp)
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .padding(start = 10.dp)
+            .focusRequester(accountRequester)
+            .onFocusChanged {
+                isFocused = it.isFocused
+                onFocusChanged(it.isFocused)
+            }
+//            .graphicsLayer {
+//                scaleX = scale
+//                scaleY = scale
+//            }
+            .clip(shape)
+            .background(backgroundColor)
+            .border(1.dp, borderColor, shape)
+            .clickable(onClick = onClick)
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    when (event.key) {
+                        Key.DirectionRight -> {
+                            if (!TvFocusManager.moveFocusToContent()) {
+                                coroutineScope.launch {
+                                    repeat(12) { attempt ->
+                                        if (TvFocusManager.moveFocusToContent()) return@launch
+                                        delay(25L * (attempt + 1))
+                                    }
+                                }
+                            }
+                            true
+                        }
+                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                            onClick()
+                            true
+                        }
+                        else -> false
+                    }
+                } else false
+            }
+            .focusable()
+            .padding(3.dp)
+    ) {
+        var isLoaded by remember(url) { mutableStateOf(false) }
+
+        AsyncImage(
+            model = url,
+            contentDescription = "My Account",
+            onState = { state ->
+                isLoaded = state is AsyncImagePainter.State.Success
+            },
+            modifier = Modifier
+                .width(32.dp)
+                .height(32.dp)
+                .clip(shape)
+                .background(
+                    color = if (isLoaded) Color.Transparent else DRAWER_LOGO_PLACEHOLDER_COLOR,
+                    shape = shape,
+                ),
+            contentScale = ContentScale.Crop
         )
     }
 }

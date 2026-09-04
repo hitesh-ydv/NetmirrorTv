@@ -39,7 +39,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
@@ -78,9 +80,11 @@ import kotlinx.coroutines.delay
 @Composable
 fun HomeCarousel(
     slider: List<SliderItem>,
+    imgReferer: String? = null,
     modifier: Modifier = Modifier,
     onPlay: (SliderItem) -> Unit = {},
     firstCardRequester: FocusRequester? = null,
+    onDownPress: (() -> Unit)? = null,
     appNavController: NavHostController,
 ) {
     if (slider.isEmpty()) return
@@ -111,10 +115,24 @@ fun HomeCarousel(
 
         LaunchedEffect(transitionKey) {
             if (transitionKey > 0 || TvFocusManager.isCarouselLastFocused) {
-                repeat(5) { attempt ->
+                repeat(8) { attempt ->
                     val focused = TvFocusManager.requestFocus(TvFocusManager.carousel)
                     if (focused) return@LaunchedEffect
-                    delay(50L * (attempt + 1))
+                    delay(40L * (attempt + 1))
+                }
+            }
+        }
+
+        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+        val coroutineScope = rememberCoroutineScope()
+        androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME, lifecycleOwner) {
+            if (TvFocusManager.isCarouselLastFocused) {
+                coroutineScope.launch {
+                    repeat(10) { attempt ->
+                        val focused = TvFocusManager.requestFocus(TvFocusManager.carousel)
+                        if (focused) return@launch
+                        delay(30L * (attempt + 1))
+                    }
                 }
             }
         }
@@ -164,9 +182,6 @@ fun HomeCarousel(
                             }
                             event.type == KeyEventType.KeyDown &&
                                     event.key == Key.DirectionLeft -> {
-                                TvFocusManager.isCarouselLastFocused = false
-                                TvFocusManager.lastFocusedHomeCardId = null
-                                TvFocusManager.lastFocusedHomeRowPosition = null
                                 TvFocusManager.moveFocusToDrawer()
                                 true
                             }
@@ -179,10 +194,16 @@ fun HomeCarousel(
                             event.type == KeyEventType.KeyDown &&
                                     event.key == Key.DirectionDown -> {
                                 TvFocusManager.isCarouselLastFocused = false
-                                if (!TvFocusManager.requestFocus(firstCardRequester)) {
-                                    TvFocusManager.requestFocus(TvFocusManager.firstCardRequester)
+                                val focused = TvFocusManager.requestFocus(firstCardRequester) ||
+                                        TvFocusManager.requestFocus(TvFocusManager.firstCardRequester)
+                                if (focused) {
+                                    true
+                                } else if (onDownPress != null) {
+                                    onDownPress()
+                                    true
+                                } else {
+                                    false
                                 }
-                                true
                             }
                             else -> false
                         }
@@ -192,10 +213,16 @@ fun HomeCarousel(
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Optimized background image
                     AsyncImage(
-                        model = remember(item.img, screenWidthPx, screenHeightPx) {
+                        model = remember(item.img, screenWidthPx, screenHeightPx, imgReferer) {
                             ImageRequest.Builder(context)
                                 .data(item.img)
                                 .size(Size(screenWidthPx, screenHeightPx))
+                                .apply {
+                                    if (!imgReferer.isNullOrBlank()) {
+                                        setHeader("Referer", imgReferer)
+                                    }
+                                    setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                }
                                 .crossfade(true)
                                 .build()
                         },
@@ -238,10 +265,16 @@ fun HomeCarousel(
                     ) {
                         // Optimized logo image
                         AsyncImage(
-                            model = remember(item.namelogo, logoWidthPx, logoHeightPx) {
+                            model = remember(item.namelogo, logoWidthPx, logoHeightPx, imgReferer) {
                                 ImageRequest.Builder(context)
                                     .data(item.namelogo)
                                     .size(Size(logoWidthPx, logoHeightPx))
+                                    .apply {
+                                        if (!imgReferer.isNullOrBlank()) {
+                                            setHeader("Referer", imgReferer)
+                                        }
+                                        setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                    }
                                     .crossfade(true)
                                     .build()
                             },
