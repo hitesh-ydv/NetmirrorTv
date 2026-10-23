@@ -35,10 +35,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -126,6 +129,8 @@ fun SearchScreen(
     val results = searchResult?.searchResult.orEmpty()
     val resultError = searchResult?.error.orEmpty()
     val cardFocusRequesters = remember(results) { results.map { FocusRequester() } }
+    var lastFocusedIndex by remember(results) { mutableIntStateOf(0) }
+    val coroutineScope = rememberCoroutineScope()
 
     // Initial focus on search field only when there is no saved focused card
     LaunchedEffect(Unit) {
@@ -180,7 +185,29 @@ fun SearchScreen(
                 },
                 focusRequester = searchFieldFocusRequester,
                 onDownPressed = {
-                    runCatching { cardFocusRequesters.firstOrNull()?.requestFocus() }.isSuccess
+                    val lastReq = cardFocusRequesters.getOrNull(lastFocusedIndex)
+                    if (lastReq != null && runCatching { lastReq.requestFocus() }.isSuccess) {
+                        true
+                    } else {
+                        val visibleIndex = rowState.firstVisibleItemIndex
+                        val visibleReq = cardFocusRequesters.getOrNull(visibleIndex)
+                        if (visibleReq != null && runCatching { visibleReq.requestFocus() }.isSuccess) {
+                            true
+                        } else if (cardFocusRequesters.isNotEmpty() && runCatching { cardFocusRequesters.first().requestFocus() }.isSuccess) {
+                            true
+                        } else if (cardFocusRequesters.isNotEmpty()) {
+                            coroutineScope.launch {
+                                rowState.scrollToItem(0)
+                                repeat(6) {
+                                    if (cardFocusRequesters.firstOrNull()?.let { runCatching { it.requestFocus() }.isSuccess } == true) return@launch
+                                    delay(30L)
+                                }
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 }
             )
 
@@ -290,6 +317,12 @@ fun SearchScreen(
                                         widthPx = widthPx,
                                         heightPx = heightPx,
                                         focusRequester = cardRequester,
+                                        onFocused = {
+                                            lastFocusedIndex = index
+                                        },
+                                        onUpPressed = {
+                                            searchFieldFocusRequester.requestFocus()
+                                        },
                                         onClick = {
                                             TvFocusManager.lastFocusedContentRequester = cardRequester
                                             TvFocusManager.lastFocusedSearchCardId = item.id
@@ -400,6 +433,7 @@ private fun SearchResultCard(
     heightPx: Int,
     focusRequester: FocusRequester? = null,
     onFocused: () -> Unit = {},
+    onUpPressed: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val cardFocusRequester = focusRequester ?: remember { FocusRequester() }
@@ -443,18 +477,23 @@ private fun SearchResultCard(
                         onFocused()
                     }
                 }
-                .onPreviewKeyEvent { event ->
-                    if (
-                        isFirstInRow &&
-                        event.type == KeyEventType.KeyDown &&
-                        event.key == Key.DirectionLeft
-                    ) {
-                        TvFocusManager.moveFocusToDrawer()
-                        true
-                    } else {
-                        false
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    when {
+                        isFirstInRow && event.key == Key.DirectionLeft -> {
+                            TvFocusManager.moveFocusToDrawer()
+                            true
+                        }
+                        event.key == Key.DirectionUp -> {
+                            onUpPressed?.invoke()
+                            true
+                        }
+                        else -> false
                     }
-                },
+                } else {
+                    false
+                }
+            },
             shape = CardDefaults.shape(shape = RowCardShape),
             border = CardDefaults.border(
                 focusedBorder = Border(

@@ -4,6 +4,19 @@ import kotlin.collections.listOf
 
 object Constants {
 
+    const val APP_VERSION = "2.1"
+
+    val DEFAULT_USER_AGENT: String = run {
+        val deviceAgent = System.getProperty("http.agent").orEmpty().trim()
+        if (deviceAgent.isNotEmpty()) {
+            "$deviceAgent /OS.GatuNewTV v$APP_VERSION"
+        } else {
+            "Mozilla/5.0 (Linux; Android) /OS.GatuNewTV v$APP_VERSION"
+        }
+    }
+
+    val USER_AGENT = DEFAULT_USER_AGENT
+
     val ENCODED_URLS = listOf(
         "aHR0cHM6Ly9tb2JpbGVkZXRlY3RzLmNvbQ==",
     "aHR0cHM6Ly9tb2JpbGVkZXRlY3QuYXBw",

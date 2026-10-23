@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -77,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import com.netmirror.netmirrortv.util.TokenStore
 import com.netmirror.netmirrortv.utils.AppSession
 import com.netmirror.netmirrortv.utils.TvFocusManager
@@ -91,7 +94,8 @@ import kotlin.system.exitProcess
 enum class AccountDialogScreen {
     PROFILES,
     SETTINGS,
-    WARNING
+    WARNING,
+    HELP
 }
 
 /**
@@ -113,6 +117,7 @@ fun AccountDialog(
     val defaultActionFocusRequester = remember { FocusRequester() }
     val warningConfirmFocusRequester = remember { FocusRequester() }
     val settingsFirstFocusRequester = remember { FocusRequester() }
+    val helpBackFocusRequester = remember { FocusRequester() }
 
     val handleDismissWithFocus: () -> Unit = {
         onDismiss()
@@ -126,6 +131,9 @@ fun AccountDialog(
                 currentScreen = previousScreen
             }
             AccountDialogScreen.SETTINGS -> {
+                currentScreen = AccountDialogScreen.PROFILES
+            }
+            AccountDialogScreen.HELP -> {
                 currentScreen = AccountDialogScreen.PROFILES
             }
             AccountDialogScreen.PROFILES -> {
@@ -146,8 +154,15 @@ fun AccountDialog(
             AccountDialogScreen.PROFILES -> runCatching { defaultActionFocusRequester.requestFocus() }
             AccountDialogScreen.SETTINGS -> runCatching { settingsFirstFocusRequester.requestFocus() }
             AccountDialogScreen.WARNING -> runCatching { warningConfirmFocusRequester.requestFocus() }
+            AccountDialogScreen.HELP -> runCatching { helpBackFocusRequester.requestFocus() }
         }
     }
+
+    val dialogCardWidth by animateDpAsState(
+        targetValue = if (currentScreen == AccountDialogScreen.HELP) 580.dp else 460.dp,
+        animationSpec = tween(180),
+        label = "dialogCardWidth"
+    )
 
     // Fullscreen dark overlay (centered dialog on the entire screen)
     Box(
@@ -170,7 +185,7 @@ fun AccountDialog(
         // Main Dialog Card Container - intercepts Key.Back preview event for immediate 1-press response
         Box(
             modifier = Modifier
-                .width(460.dp)
+                .width(dialogCardWidth)
                 .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown &&
                         (event.key == Key.Back || event.key == Key.Escape)
@@ -205,7 +220,7 @@ fun AccountDialog(
             AnimatedContent(
                 targetState = currentScreen,
                 transitionSpec = {
-                    if (targetState == AccountDialogScreen.WARNING || targetState == AccountDialogScreen.SETTINGS) {
+                    if (targetState == AccountDialogScreen.WARNING || targetState == AccountDialogScreen.SETTINGS || targetState == AccountDialogScreen.HELP) {
                         (slideInHorizontally { it / 4 } + fadeIn(tween(160)))
                             .togetherWith(slideOutHorizontally { -it / 4 } + fadeOut(tween(130)))
                     } else {
@@ -224,6 +239,10 @@ fun AccountDialog(
                             onOpenSettings = {
                                 previousScreen = AccountDialogScreen.PROFILES
                                 currentScreen = AccountDialogScreen.SETTINGS
+                            },
+                            onOpenHelp = {
+                                previousScreen = AccountDialogScreen.PROFILES
+                                currentScreen = AccountDialogScreen.HELP
                             },
                             onOpenWarning = {
                                 previousScreen = AccountDialogScreen.PROFILES
@@ -246,6 +265,16 @@ fun AccountDialog(
                             },
                             onBackPress = handleBackPress,
                             onDismiss = handleDismissWithFocus
+                        )
+                    }
+
+                    AccountDialogScreen.HELP -> {
+                        HelpView(
+                            backFocusRequester = helpBackFocusRequester,
+                            onBack = {
+                                currentScreen = AccountDialogScreen.PROFILES
+                            },
+                            onBackPress = handleBackPress
                         )
                     }
 
@@ -276,6 +305,7 @@ private fun ProfilesView(
     hasUserToken: Boolean,
     defaultFocusRequester: FocusRequester,
     onOpenSettings: () -> Unit,
+    onOpenHelp: () -> Unit,
     onOpenWarning: () -> Unit,
     onBackPress: () -> Unit,
     onDismiss: () -> Unit
@@ -443,42 +473,26 @@ private fun ProfilesView(
             StructuredMenuItemRow(
                 icon = Icons.Default.HelpOutline,
                 label = "Help",
-                subtitle = "visit netmirro.gg for more info.",
-                showArrow = false,
+                showArrow = true,
                 focusRequester = helpRequester,
                 onBackPress = onBackPress,
                 onKeyDownCustom = { key ->
                     when (key) {
+                        Key.DirectionDown -> true // trap focus at bottom item
                         Key.DirectionLeft, Key.DirectionRight -> true // trap focus
                         else -> false
                     }
                 },
-                onClick = null
+                onClick = onOpenHelp
             )
 
-            // Clear App Data / Sign Out (Bottom item)
-            StructuredMenuItemRow(
-                icon = Icons.Default.DeleteForever,
-                label = "Clear App Data",
-                isDanger = true,
-                focusRequester = clearDataRequester,
-                onBackPress = onBackPress,
-                onKeyDownCustom = { key ->
-                    when (key) {
-                        Key.DirectionDown -> true // trap focus at bottom
-                        Key.DirectionLeft, Key.DirectionRight -> true // trap focus
-                        else -> false
-                    }
-                },
-                onClick = onOpenWarning
-            )
         }
 
         Spacer(modifier = Modifier.height(18.dp))
 
         // 4. App Version Footer
         Text(
-            text = "Version: 2.0 (Android TV)",
+            text = "Version: ${AppSession.currentAppVersion()} (Android TV)",
             fontSize = 11.sp,
             color = Color.White.copy(alpha = 0.45f),
             textAlign = TextAlign.Center
@@ -800,6 +814,152 @@ private fun WarningConfirmationView(
                 onClick = onCancel
             )
         }
+    }
+}
+
+/**
+ * Screen 4: Help View displaying the large help image with back button to main menu.
+ */
+@Composable
+private fun HelpView(
+    backFocusRequester: FocusRequester,
+    onBack: () -> Unit,
+    onBackPress: () -> Unit
+) {
+    val helpImageUrl = "https://dimg04.tripcdn.com/images/0a13m12000tn3gjwxFE31.jpg"
+    val headerBackRequester = remember { FocusRequester() }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 1. Top Header Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TvIconButton(
+                icon = Icons.Default.ArrowBack,
+                contentDescription = "Back to Main Menu",
+                focusRequester = headerBackRequester,
+                onBackPress = onBackPress,
+                onKeyDownCustom = { key ->
+                    when (key) {
+                        Key.DirectionDown -> {
+                            backFocusRequester.requestFocus()
+                            true
+                        }
+                        Key.DirectionUp, Key.DirectionLeft, Key.DirectionRight -> true
+                        else -> false
+                    }
+                },
+                onClick = onBack
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Text(
+                text = "Help",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 2. Large Help Image
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF1B1B20))
+                .border(
+                    width = 1.dp,
+                    color = Color.White.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(16.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            var imageState by remember { mutableStateOf<AsyncImagePainter.State>(AsyncImagePainter.State.Empty) }
+
+            AsyncImage(
+                model = helpImageUrl,
+                contentDescription = "Help Image",
+                contentScale = ContentScale.Fit,
+                onState = { state ->
+                    imageState = state
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp)
+            )
+
+            when (imageState) {
+                is AsyncImagePainter.State.Loading, is AsyncImagePainter.State.Empty -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(42.dp),
+                            color = Color(0xFFE50914),
+                            strokeWidth = 3.5.dp,
+                            trackColor = Color.White.copy(alpha = 0.12f)
+                        )
+                    }
+                }
+                is AsyncImagePainter.State.Error -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.HelpOutline,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.35f),
+                            modifier = Modifier.size(52.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Failed to load image",
+                            color = Color.White.copy(alpha = 0.5f),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                is AsyncImagePainter.State.Success -> {
+                    // Image loaded successfully
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // 3. Back Button to Main Menu
+        AccountDialogButton(
+            label = "Back to Main Menu",
+            icon = Icons.Default.ArrowBack,
+            isDanger = false,
+            focusRequester = backFocusRequester,
+            modifier = Modifier.fillMaxWidth(),
+            onBackPress = onBackPress,
+            onKeyDownCustom = { key ->
+                when (key) {
+                    Key.DirectionUp -> {
+                        headerBackRequester.requestFocus()
+                        true
+                    }
+                    Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight -> true
+                    else -> false
+                }
+            },
+            onClick = onBack
+        )
     }
 }
 

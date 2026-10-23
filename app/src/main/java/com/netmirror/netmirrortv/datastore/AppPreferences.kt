@@ -21,11 +21,12 @@ class AppPreferences(
 
         private val SELECTED_OTT = stringPreferencesKey("selected_ott")
 
+        private val API_VERSION = stringPreferencesKey("api_version")
+
+        private val APP_VERSION = stringPreferencesKey("app_version")
+
     }
 
-    val selectedOttFlow: Flow<String> = context.dataStore.data
-        .map { it[SELECTED_OTT] ?: "nf" }
-        .distinctUntilChanged()
 
     suspend fun saveBaseUrl(url: String) {
 
@@ -56,6 +57,38 @@ class AppPreferences(
     suspend fun getOtt(): String {
 
         return context.dataStore.data.first()[SELECTED_OTT] ?: "nf"
+
+    }
+
+    suspend fun saveApiVersion(version: String) {
+
+        context.dataStore.edit {
+
+            it[API_VERSION] = version
+
+        }
+
+    }
+
+    suspend fun getApiVersion(): String {
+
+        return context.dataStore.data.first()[API_VERSION] ?: ""
+
+    }
+
+    suspend fun saveAppVersion(version: String) {
+
+        context.dataStore.edit {
+
+            it[APP_VERSION] = version
+
+        }
+
+    }
+
+    suspend fun getAppVersion(): String {
+
+        return context.dataStore.data.first()[APP_VERSION] ?: ""
 
     }
 

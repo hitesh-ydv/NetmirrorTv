@@ -24,6 +24,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -194,9 +195,15 @@ internal fun HomeMediaRow(
         }
     }
 
-    LaunchedEffect(rowPosition, cardFocusRequesters) {
+    DisposableEffect(rowPosition, cardFocusRequesters) {
         if (rowPosition != null && cardFocusRequesters.isNotEmpty()) {
-            TvFocusManager.rowFocusRequesters[rowPosition] = cardFocusRequesters.first()
+            val targetReq = cardFocusRequesters.getOrNull(lastFocusedIndex) ?: cardFocusRequesters.first()
+            TvFocusManager.rowFocusRequesters[rowPosition] = targetReq
+        }
+        onDispose {
+            if (rowPosition != null) {
+                TvFocusManager.rowFocusRequesters.remove(rowPosition)
+            }
         }
     }
 
@@ -218,6 +225,40 @@ internal fun HomeMediaRow(
     }
 
     val rowState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+
+    if (rowPosition == 0) {
+        DisposableEffect(cardFocusRequesters, rowState) {
+            TvFocusManager.focusFirstRow = {
+                val lastReq = cardFocusRequesters.getOrNull(lastFocusedIndex)
+                if (lastReq != null && TvFocusManager.requestFocus(lastReq)) {
+                    true
+                } else {
+                    val visibleIndex = rowState.firstVisibleItemIndex
+                    val visibleReq = cardFocusRequesters.getOrNull(visibleIndex)
+                    if (visibleReq != null && TvFocusManager.requestFocus(visibleReq)) {
+                        true
+                    } else if (cardFocusRequesters.isNotEmpty() && TvFocusManager.requestFocus(cardFocusRequesters.first())) {
+                        true
+                    } else {
+                        coroutineScope.launch {
+                            rowState.scrollToItem(0)
+                            repeat(6) {
+                                if (cardFocusRequesters.firstOrNull()?.let { TvFocusManager.requestFocus(it) } == true) return@launch
+                                delay(30L)
+                            }
+                        }
+                        true
+                    }
+                }
+            }
+            onDispose {
+                if (TvFocusManager.focusFirstRow != null) {
+                    TvFocusManager.focusFirstRow = null
+                }
+            }
+        }
+    }
 
     val density = LocalDensity.current
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp

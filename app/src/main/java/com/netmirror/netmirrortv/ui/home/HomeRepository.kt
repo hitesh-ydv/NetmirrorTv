@@ -19,6 +19,9 @@ class HomeRepository(
 
         val baseUrl = AppSession.currentBaseUrl().ifBlank { preferences.getBaseUrl() }
 
+        Log.d("NAVBARs", "OTT Changed = $baseUrl")
+
+
         if (baseUrl.isEmpty()) return null
 
         val ott = AppSession.currentOtt().ifBlank { preferences.getOtt() }

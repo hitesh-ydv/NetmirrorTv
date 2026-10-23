@@ -1,5 +1,7 @@
 package com.netmirror.netmirrortv.ui.home
 
+import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,9 +16,13 @@ import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,6 +58,37 @@ fun HomeScreen(
     viewModel: HomeViewModel = viewModel(),
     appNavController: NavHostController,
 ) {
+    val context = LocalContext.current
+    var showExitDialog by remember { mutableStateOf(false) }
+
+    BackHandler {
+        showExitDialog = true
+    }
+
+    if (showExitDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showExitDialog = false
+                TvFocusManager.moveFocusToContent()
+            },
+            title = { Text("Exit App") },
+            text = { Text("Are you sure you want to exit the app?") },
+            confirmButton = {
+                TextButton(onClick = { (context as? Activity)?.finish() }) {
+                    Text("Yes")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showExitDialog = false
+                    TvFocusManager.moveFocusToContent()
+                }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     val loading by viewModel.loading.collectAsState()
     val home by viewModel.home.collectAsState()
 
@@ -75,7 +112,6 @@ fun HomeScreen(
     }
 
     val listState = rememberLazyListState()
-    val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
@@ -97,17 +133,53 @@ fun HomeScreen(
         TvFocusManager.currentScreenContentRequester = firstCardFocusRequester
     }
 
-    LaunchedEffect(homeResponse, hasCarousel, firstCardFocusRequester) {
+    val coroutineScope = rememberCoroutineScope()
+
+    DisposableEffect(listState, hasCarousel, firstCardFocusRequester) {
         TvFocusManager.firstCardRequester = firstCardFocusRequester
         if (hasCarousel) {
             TvFocusManager.currentScreenContentRequester = TvFocusManager.carousel
         } else {
             TvFocusManager.currentScreenContentRequester = firstCardFocusRequester
         }
+        fun doFocusVisible(): Boolean {
+            val visibleItems = listState.layoutInfo.visibleItemsInfo
+            for (item in visibleItems) {
+                if (hasCarousel && item.index == 0) {
+                    if (TvFocusManager.requestFocus(TvFocusManager.carousel)) return true
+                } else {
+                    val rowPos = if (hasCarousel) item.index - 1 else item.index
+                    val req = TvFocusManager.rowFocusRequesters[rowPos]
+                    if (req != null && TvFocusManager.requestFocus(req)) return true
+                }
+            }
+            if (TvFocusManager.lastFocusedHomeCardId != null &&
+                TvFocusManager.requestFocus(TvFocusManager.lastFocusedContentRequester)
+            ) {
+                return true
+            }
+            for (pos in TvFocusManager.rowFocusRequesters.keys.sorted()) {
+                val req = TvFocusManager.rowFocusRequesters[pos]
+                if (req != null && TvFocusManager.requestFocus(req)) return true
+            }
+            if (TvFocusManager.requestFocus(firstCardFocusRequester)) return true
+            if (hasCarousel && TvFocusManager.requestFocus(TvFocusManager.carousel)) return true
+            return false
+        }
+
+        TvFocusManager.focusVisibleContent = ::doFocusVisible
+
+        onDispose {
+            if (TvFocusManager.focusVisibleContent != null) {
+                TvFocusManager.focusVisibleContent = null
+            }
+            if (TvFocusManager.firstCardRequester == firstCardFocusRequester) {
+                TvFocusManager.firstCardRequester = null
+            }
+        }
     }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    val coroutineScope = rememberCoroutineScope()
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME, lifecycleOwner) {
         TvFocusManager.firstCardRequester = firstCardFocusRequester
         if (hasCarousel) {
@@ -225,7 +297,10 @@ fun HomeScreen(
                             coroutineScope.launch {
                                 listState.animateScrollToItem(1)
                                 repeat(8) { attempt ->
-                                    val focused = TvFocusManager.requestFocus(firstCardFocusRequester) ||
+                                    val rowZeroRequester = TvFocusManager.rowFocusRequesters[0]
+                                    val focused = (TvFocusManager.focusFirstRow?.invoke() == true) ||
+                                            TvFocusManager.requestFocus(rowZeroRequester) ||
+                                            TvFocusManager.requestFocus(firstCardFocusRequester) ||
                                             TvFocusManager.requestFocus(TvFocusManager.firstCardRequester)
                                     if (focused) return@launch
                                     delay(30L * (attempt + 1))

@@ -1,5 +1,6 @@
 package com.netmirror.netmirrortv
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -9,11 +10,14 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.compose.rememberNavController
 import com.netmirror.netmirrortv.navigation.AppNavigation
+import com.netmirror.netmirrortv.utils.AppSession
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        AppSession.resetUpdateDialogState()
 
         hideSystemBars()
 
@@ -22,6 +26,18 @@ class MainActivity : ComponentActivity() {
 
             AppNavigation(navController)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        AppSession.resetUpdateDialogState()
+        AppSession.triggerUpdateCheck()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        AppSession.resetUpdateDialogState()
     }
 
     override fun onResume() {

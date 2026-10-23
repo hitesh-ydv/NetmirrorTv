@@ -6,7 +6,13 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
-import androidx.annotation.OptIn
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -102,6 +108,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
@@ -118,6 +125,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.netmirror.netmirrortv.util.TokenStore
+import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.utils.PlaybackProgressStore
 import com.netmirror.netmirrortv.utils.PlayerPreferences
 import kotlinx.coroutines.delay
@@ -148,8 +156,39 @@ private object PlayerCacheManager {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+private object CenterBringIntoViewSpec : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+        val itemCenter = offset + size / 2f
+        val containerCenter = containerSize / 2f
+        return itemCenter - containerCenter
+    }
+}
+
 enum class MenuTab {
-    AUDIO, SUBTITLE, RESOLUTION, SPEED, SUBTITLE_SETTINGS
+    AUDIO, SUBTITLE, RESOLUTION,SERVER, SPEED, SUBTITLE_SETTINGS
+}
+
+data class ServerItem(
+    val name: String,
+    val headerCode: String,
+    val active: Boolean = false
+)
+
+object TestingServers {
+    val servers = listOf(
+        ServerItem(name = "Server 1", headerCode = "S1", active = true),
+        ServerItem(name = "Server 2", headerCode = "S2", active = false),
+        ServerItem(name = "Server 3", headerCode = "S3", active = false),
+        ServerItem(name = "Server 4", headerCode = "S4", active = false),
+        ServerItem(name = "Server 5", headerCode = "S5", active = false)
+    )
+
+    fun getServers(activeCode: String = "S1"): List<ServerItem> {
+        return servers.map { server ->
+            server.copy(active = server.headerCode.equals(activeCode, ignoreCase = true))
+        }
+    }
 }
 
 enum class PlayerFocusArea {
@@ -237,6 +276,10 @@ fun PlayerScreen(
                         id = id,
                         mainId = mainId,
                         type = type,
+                        activeServerCode = s.server,
+                        onServerSelected = { serverItem ->
+                            viewModel.loadStream(id = id, server = serverItem.headerCode, force = true)
+                        },
                         onThirtySecondsPlayed = {
                             viewModel.logRecentPlay(id = id, mainId = mainId, type = type)
                         }
@@ -254,7 +297,7 @@ fun PlayerScreen(
     }
 }
 
-@OptIn(UnstableApi::class)
+@OptIn(ExperimentalFoundationApi::class, UnstableApi::class)
 @Composable
 private fun PlayerContent(
     streamUrl: String,
@@ -266,6 +309,8 @@ private fun PlayerContent(
     id: String = "",
     mainId: String = "",
     type: String = "",
+    activeServerCode: String = "S1",
+    onServerSelected: (ServerItem) -> Unit = {},
     onThirtySecondsPlayed: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -300,11 +345,11 @@ private fun PlayerContent(
             setReadTimeoutMs(20_000)
             setAllowCrossProtocolRedirects(true)
             setKeepPostFor302Redirects(true)
-            setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0")
+            setUserAgent(Constants.DEFAULT_USER_AGENT)
             setDefaultRequestProperties(
                 buildMap {
                     put("Referer", referer)
-                    put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0")
+                    put("User-Agent", Constants.DEFAULT_USER_AGENT)
                     put("X-Requested-With", "NetmirrorNewTV v1.0")
                 }
             )
@@ -317,24 +362,24 @@ private fun PlayerContent(
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                199_000,
-                200_000,
-                1_500,
-                3_000
+                30_000,
+                60_000,
+                1_000,
+                1_000
             )
-            .setBackBuffer(100_000, true)
-            .setPrioritizeTimeOverSizeThresholds(false)
+            .setBackBuffer(120_000, true)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val renderersFactory = DefaultRenderersFactory(context).apply {
             setEnableDecoderFallback(true)
             setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            forceEnableMediaCodecAsynchronousQueueing()
+            setAllowedVideoJoiningTimeMs(5000)
             setMediaCodecSelector(MediaCodecSelector.DEFAULT)
         }
 
         val hlsMediaSourceFactory = HlsMediaSource.Factory(cacheDataSourceFactory)
-            .setAllowChunklessPreparation(true)
+            .setAllowChunklessPreparation(false)
             .setMetadataType(HlsMediaSource.METADATA_TYPE_ID3)
 
         val mediaItem = MediaItem.Builder()
@@ -348,7 +393,7 @@ private fun PlayerContent(
             .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
-            .setSeekParameters(SeekParameters.DEFAULT)
+            .setSeekParameters(SeekParameters.CLOSEST_SYNC)
             .build()
             .apply {
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
@@ -381,12 +426,9 @@ private fun PlayerContent(
 
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var isPlaying by remember { mutableStateOf(true) }
-    var isBuffering by remember {
-        mutableStateOf(
-            exoPlayer.playbackState == Player.STATE_BUFFERING ||
-            exoPlayer.playbackState == Player.STATE_IDLE
-        )
-    }
+    var playerPlaybackState by remember { mutableStateOf(exoPlayer.playbackState) }
+    var playerPlayWhenReady by remember { mutableStateOf(exoPlayer.playWhenReady) }
+    var isBuffering by remember { mutableStateOf(false) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var bufferedPosition by remember { mutableLongStateOf(0L) }
@@ -421,6 +463,18 @@ private fun PlayerContent(
     var activeFocusArea by remember { mutableStateOf(PlayerFocusArea.PLAY_PAUSE) }
     var activeMenuTab by remember { mutableStateOf(MenuTab.AUDIO) }
 
+    // Focus Requesters
+    val playPauseFocusRequester = remember { FocusRequester() }
+    val tabAudioFocusRequester = remember { FocusRequester() }
+    val tabSubtitleFocusRequester = remember { FocusRequester() }
+    val tabResolutionFocusRequester = remember { FocusRequester() }
+    val tabSpeedFocusRequester = remember { FocusRequester() }
+    val tabSubtitleSettingsFocusRequester = remember { FocusRequester() }
+    val tabServerFocusRequester = remember { FocusRequester() }
+    val contentFirstOptionFocusRequester = remember { FocusRequester() }
+    val rootFocusRequester = remember { FocusRequester() }
+
+
     // Fast seeking state
     var isFastSeeking by remember { mutableStateOf(false) }
     var showSeekOverlay by remember { mutableStateOf(false) }
@@ -429,6 +483,30 @@ private fun PlayerContent(
     var seekHoldStartTime by remember { mutableLongStateOf(0L) }
     var lastSeekDirection by remember { mutableStateOf(0) } // -1 for Left, 1 for Right
     var seekEventTrigger by remember { mutableLongStateOf(0L) }
+
+    // Genuinely waiting for media spinner state:
+    // Only display spinner when playback is actively waiting for media data and has been waiting past a 450ms grace threshold.
+    // Instant seeks into preloaded/cached segments resolve before this threshold, avoiding spinner flashes completely.
+    val isWaitingForMedia = playerPlaybackState == Player.STATE_BUFFERING && playerPlayWhenReady
+    val isInitialPreparing = (duration <= 0L || duration == C.TIME_UNSET) && playerPlaybackState != Player.STATE_ENDED
+
+    LaunchedEffect(isWaitingForMedia, isInitialPreparing, isFastSeeking) {
+        if (isFastSeeking) {
+            isBuffering = false
+            return@LaunchedEffect
+        }
+        if (isInitialPreparing) {
+            delay(200L)
+            isBuffering = true
+        } else if (isWaitingForMedia) {
+            delay(450L)
+            if (isWaitingForMedia && !isFastSeeking) {
+                isBuffering = true
+            }
+        } else {
+            isBuffering = false
+        }
+    }
 
     // Auto-dismiss seek pop-up card 1.5 seconds after key release
     LaunchedEffect(isFastSeeking, seekEventTrigger) {
@@ -442,16 +520,19 @@ private fun PlayerContent(
         }
     }
 
-    // Debounce safety fallback for remotes without KeyUp event
+    // Debounce commit for rapid repeated seeks & IR remotes without KeyUp
     LaunchedEffect(fastSeekTargetPos, isFastSeeking) {
         if (isFastSeeking) {
-            delay(800L)
+            delay(220L)
             if (isFastSeeking) {
-                isBuffering = true
                 exoPlayer.seekTo(fastSeekTargetPos)
                 currentPosition = fastSeekTargetPos
                 isFastSeeking = false
                 seekHoldStartTime = 0L
+                try {
+                    playPauseFocusRequester.requestFocus()
+                } catch (_: Exception) {
+                }
             }
         }
     }
@@ -487,15 +568,8 @@ private fun PlayerContent(
         }
     }
 
-    // Focus Requesters
-    val playPauseFocusRequester = remember { FocusRequester() }
-    val tabAudioFocusRequester = remember { FocusRequester() }
-    val tabSubtitleFocusRequester = remember { FocusRequester() }
-    val tabResolutionFocusRequester = remember { FocusRequester() }
-    val tabSpeedFocusRequester = remember { FocusRequester() }
-    val tabSubtitleSettingsFocusRequester = remember { FocusRequester() }
-    val contentFirstOptionFocusRequester = remember { FocusRequester() }
-    val rootFocusRequester = remember { FocusRequester() }
+    var currentActiveServer by remember(activeServerCode) { mutableStateOf(activeServerCode) }
+
 
     // Default Focus on Center Play/Pause button on launch
     LaunchedEffect(Unit) {
@@ -566,9 +640,9 @@ private fun PlayerContent(
         if (!metaLoaded || resumeAtMs <= 0L || hasResumed) return@LaunchedEffect
 
         // Ensure resume position is not at the very end of video (> duration - 5s)
-        if (resumeAtMs < (exoPlayer.duration - 5000L).coerceAtLeast(0L)) {
+        val exactDuration = if (exoPlayer.duration > 0L && exoPlayer.duration != C.TIME_UNSET) exoPlayer.duration else duration
+        if (resumeAtMs < (exactDuration - 5000L).coerceAtLeast(0L)) {
             Log.d("PlayerScreen", "Resuming playback from stored position: ${resumeAtMs}ms (${formatTime(resumeAtMs)}) for ID: $id")
-            isBuffering = true
             exoPlayer.seekTo(resumeAtMs)
             exoPlayer.play()
         }
@@ -624,27 +698,27 @@ private fun PlayerContent(
     // Periodically update current video position and buffer status
     LaunchedEffect(isPlaying) {
         while (true) {
-            if (!isFastSeeking && !showSeekOverlay) {
+            if (!isFastSeeking) {
                 currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
             }
-            duration = exoPlayer.duration.coerceAtLeast(0L)
+            val exactDuration = exoPlayer.duration
+            if (exactDuration > 0L && exactDuration != C.TIME_UNSET) {
+                duration = exactDuration
+                if (!metaLoaded) {
+                    metaLoaded = true
+                }
+            }
             bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L)
             isPlaying = exoPlayer.isPlaying
-
-            if (!isFastSeeking) {
-                isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING || exoPlayer.playbackState == Player.STATE_IDLE
-            }
-
-            if (!metaLoaded && exoPlayer.duration > 0L) {
-                metaLoaded = true
-            }
+            playerPlaybackState = exoPlayer.playbackState
+            playerPlayWhenReady = exoPlayer.playWhenReady
 
             // Fire 30-second trigger once current playback position hits 30 seconds (30,000ms)
             if (!thirtySecondTriggered && currentPosition >= 30_000L) {
                 thirtySecondTriggered = true
             }
 
-            delay(400L)
+            delay(250L)
         }
     }
 
@@ -667,14 +741,25 @@ private fun PlayerContent(
                 }
             }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                isBuffering = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
-                duration = exoPlayer.duration.coerceAtLeast(0L)
-                if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
-                    if (exoPlayer.duration > 0L) {
-                        metaLoaded = true
-                    }
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                val exactDuration = exoPlayer.duration
+                if (exactDuration > 0L && exactDuration != C.TIME_UNSET) {
+                    duration = exactDuration
+                    metaLoaded = true
                 }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                playerPlaybackState = playbackState
+                val exactDuration = exoPlayer.duration
+                if (exactDuration > 0L && exactDuration != C.TIME_UNSET) {
+                    duration = exactDuration
+                    metaLoaded = true
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                playerPlayWhenReady = playWhenReady
             }
 
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -693,13 +778,14 @@ private fun PlayerContent(
                     )
                     initialPreferencesSet = true
                 }
-                if (exoPlayer.duration > 0L) {
+                val exactDuration = exoPlayer.duration
+                if (exactDuration > 0L && exactDuration != C.TIME_UNSET) {
+                    duration = exactDuration
                     metaLoaded = true
                 }
             }
         }
         exoPlayer.addListener(listener)
-        isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING || exoPlayer.playbackState == Player.STATE_IDLE
 
         onDispose {
             // Save progress once when component unmounts
@@ -796,6 +882,7 @@ private fun PlayerContent(
                                         MenuTab.RESOLUTION -> tabResolutionFocusRequester
                                         MenuTab.SPEED -> tabSpeedFocusRequester
                                         MenuTab.SUBTITLE_SETTINGS -> tabSubtitleSettingsFocusRequester
+                                        MenuTab.SERVER -> tabServerFocusRequester
                                     }
                                     runCatching { req.requestFocus() }
                                     return@onPreviewKeyEvent true
@@ -807,11 +894,28 @@ private fun PlayerContent(
                                 }
                             }
                         }
+                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                            if (isFastSeeking) {
+                                exoPlayer.seekTo(fastSeekTargetPos)
+                                currentPosition = fastSeekTargetPos
+                                isFastSeeking = false
+                                seekHoldStartTime = 0L
+                                seekEventTrigger = System.currentTimeMillis()
+                                try {
+                                    playPauseFocusRequester.requestFocus()
+                                } catch (_: Exception) {
+                                }
+                                return@onPreviewKeyEvent true
+                            }
+                        }
                         Key.DirectionLeft, Key.MediaRewind, Key.MediaStepBackward -> {
                             if (!controlsVisible || !isMenuVisible || activeFocusArea == PlayerFocusArea.PLAY_PAUSE) {
                                 controlsVisible = true
                                 activeFocusArea = PlayerFocusArea.PLAY_PAUSE
-                                runCatching { playPauseFocusRequester.requestFocus() }
+                                try {
+                                    playPauseFocusRequester.requestFocus()
+                                } catch (_: Exception) {
+                                }
                                 val playerDuration = exoPlayer.duration
                                 val maxDur = if (playerDuration > 0L) playerDuration else Long.MAX_VALUE
                                 val now = System.currentTimeMillis()
@@ -845,7 +949,10 @@ private fun PlayerContent(
                             if (!controlsVisible || !isMenuVisible || activeFocusArea == PlayerFocusArea.PLAY_PAUSE) {
                                 controlsVisible = true
                                 activeFocusArea = PlayerFocusArea.PLAY_PAUSE
-                                runCatching { playPauseFocusRequester.requestFocus() }
+                                try {
+                                    playPauseFocusRequester.requestFocus()
+                                } catch (_: Exception) {
+                                }
                                 val playerDuration = exoPlayer.duration
                                 val maxDur = if (playerDuration > 0L) playerDuration else Long.MAX_VALUE
                                 val now = System.currentTimeMillis()
@@ -880,14 +987,25 @@ private fun PlayerContent(
                     if ((event.key == Key.DirectionLeft || event.key == Key.DirectionRight ||
                          event.key == Key.MediaRewind || event.key == Key.MediaFastForward ||
                          event.key == Key.MediaStepBackward || event.key == Key.MediaStepForward) && isFastSeeking) {
-                        isBuffering = true
-                        exoPlayer.seekTo(fastSeekTargetPos)
-                        currentPosition = fastSeekTargetPos
-                        isFastSeeking = false
-                        seekHoldStartTime = 0L
-                        seekEventTrigger = System.currentTimeMillis()
-                        runCatching { playPauseFocusRequester.requestFocus() }
-                        return@onPreviewKeyEvent true
+                        val now = System.currentTimeMillis()
+                        val holdDuration = now - seekHoldStartTime
+                        if (holdDuration >= 400L) {
+                            // Sustained hold released: commit seek immediately
+                            exoPlayer.seekTo(fastSeekTargetPos)
+                            currentPosition = fastSeekTargetPos
+                            isFastSeeking = false
+                            seekHoldStartTime = 0L
+                            seekEventTrigger = now
+                            try {
+                                playPauseFocusRequester.requestFocus()
+                            } catch (_: Exception) {
+                            }
+                            return@onPreviewKeyEvent true
+                        } else {
+                            // Quick tap: let LaunchedEffect(fastSeekTargetPos, isFastSeeking) commit after 220ms
+                            seekEventTrigger = now
+                            return@onPreviewKeyEvent true
+                        }
                     }
                 }
 
@@ -1011,25 +1129,6 @@ private fun PlayerContent(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    if (displayMainTitle.isNotBlank()) {
-                        Text(
-                            text = displayMainTitle,
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
-                        )
-                    }
-
-                    if (displayMainTitle.isNotBlank() && (displayEp.isNotBlank() || displayEpTitle.isNotBlank())) {
-                        Text(
-                            text = "|",
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Light,
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
-                    }
 
                     if (displayEp.isNotBlank()) {
                         Box(
@@ -1049,7 +1148,28 @@ private fun PlayerContent(
                         }
                     }
 
-                    if (displayEp.isNotBlank() && displayEpTitle.isNotBlank()) {
+
+                    if (displayMainTitle.isNotBlank() && (displayEp.isNotBlank() || displayEpTitle.isNotBlank())) {
+                        Text(
+                            text = "|",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Light,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+
+                    if (displayMainTitle.isNotBlank()) {
+                        Text(
+                            text = displayMainTitle,
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+
+                    if (displayMainTitle.isNotBlank() && displayEpTitle.isNotBlank()) {
                         Text(
                             text = "|",
                             color = Color.White.copy(alpha = 0.6f),
@@ -1215,7 +1335,7 @@ private fun PlayerContent(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val displayPosition = if (showSeekOverlay || isFastSeeking) fastSeekTargetPos else currentPosition
+                    val displayPosition = if (isFastSeeking) fastSeekTargetPos else currentPosition
                     val progress = if (duration > 0) (displayPosition.toFloat() / duration.toFloat()) else 0f
                     val bufferProgress = if (duration > 0) (bufferedPosition.toFloat() / duration.toFloat()) else 0f
 
@@ -1370,234 +1490,351 @@ private fun PlayerContent(
                         bottom = 24.dp
                     )
             ) {
-                // Row 1: Separate Menu Tabs (Audio, Subtitle, Resolution, Playback Speed)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 20.dp)
-                ) {
-                    MenuTabPill(
-                        title = "Audio",
-                        badge = selectedAudioLabel,
-                        isSelected = activeMenuTab == MenuTab.AUDIO,
-                        focusRequester = tabAudioFocusRequester,
-                        onFocusGained = {
-                            activeFocusArea = PlayerFocusArea.MENU_TABS
-                            activeMenuTab = MenuTab.AUDIO
-                        },
-                        onClick = {
-                            activeMenuTab = MenuTab.AUDIO
+                // Row 1: Separate Menu Tabs (Audio, Subtitle, Resolution, Playback Speed, Subtitle Style, Server)
+                CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        contentPadding = PaddingValues(vertical = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 20.dp)
+                    ) {
+                        item {
+                            MenuTabPill(
+                                title = "Audio",
+                                badge = selectedAudioLabel,
+                                isSelected = activeMenuTab == MenuTab.AUDIO,
+                                focusRequester = tabAudioFocusRequester,
+                                isFirst = true,
+                                onFocusGained = {
+                                    activeFocusArea = PlayerFocusArea.MENU_TABS
+                                    activeMenuTab = MenuTab.AUDIO
+                                },
+                                onClick = {
+                                    activeMenuTab = MenuTab.AUDIO
+                                }
+                            )
                         }
-                    )
 
-                    MenuTabPill(
-                        title = "Subtitle",
-                        badge = selectedSubtitleLabel,
-                        isSelected = activeMenuTab == MenuTab.SUBTITLE,
-                        focusRequester = tabSubtitleFocusRequester,
-                        onFocusGained = {
-                            activeFocusArea = PlayerFocusArea.MENU_TABS
-                            activeMenuTab = MenuTab.SUBTITLE
-                        },
-                        onClick = {
-                            activeMenuTab = MenuTab.SUBTITLE
+                        item {
+                            MenuTabPill(
+                                title = "Subtitle",
+                                badge = selectedSubtitleLabel,
+                                isSelected = activeMenuTab == MenuTab.SUBTITLE,
+                                focusRequester = tabSubtitleFocusRequester,
+                                onFocusGained = {
+                                    activeFocusArea = PlayerFocusArea.MENU_TABS
+                                    activeMenuTab = MenuTab.SUBTITLE
+                                },
+                                onClick = {
+                                    activeMenuTab = MenuTab.SUBTITLE
+                                }
+                            )
                         }
-                    )
 
-                    MenuTabPill(
-                        title = "Resolution",
-                        badge = selectedQualityLabel,
-                        isSelected = activeMenuTab == MenuTab.RESOLUTION,
-                        focusRequester = tabResolutionFocusRequester,
-                        onFocusGained = {
-                            activeFocusArea = PlayerFocusArea.MENU_TABS
-                            activeMenuTab = MenuTab.RESOLUTION
-                        },
-                        onClick = {
-                            activeMenuTab = MenuTab.RESOLUTION
+                        item {
+                            MenuTabPill(
+                                title = "Resolution",
+                                badge = selectedQualityLabel,
+                                isSelected = activeMenuTab == MenuTab.RESOLUTION,
+                                focusRequester = tabResolutionFocusRequester,
+                                onFocusGained = {
+                                    activeFocusArea = PlayerFocusArea.MENU_TABS
+                                    activeMenuTab = MenuTab.RESOLUTION
+                                },
+                                onClick = {
+                                    activeMenuTab = MenuTab.RESOLUTION
+                                }
+                            )
                         }
-                    )
 
-                    MenuTabPill(
-                        title = "Playback Speed",
-                        badge = selectedSpeedLabel,
-                        isSelected = activeMenuTab == MenuTab.SPEED,
-                        focusRequester = tabSpeedFocusRequester,
-                        onFocusGained = {
-                            activeFocusArea = PlayerFocusArea.MENU_TABS
-                            activeMenuTab = MenuTab.SPEED
-                        },
-                        onClick = {
-                            activeMenuTab = MenuTab.SPEED
+                        item {
+                            MenuTabPill(
+                                title = "Server",
+                                badge = TestingServers.getServers(currentActiveServer).firstOrNull { it.active }?.name ?: "Server 1",
+                                isSelected = activeMenuTab == MenuTab.SERVER,
+                                focusRequester = tabServerFocusRequester,
+                                onFocusGained = {
+                                    activeFocusArea = PlayerFocusArea.MENU_TABS
+                                    activeMenuTab = MenuTab.SERVER
+                                },
+                                onClick = {
+                                    activeMenuTab = MenuTab.SERVER
+                                }
+                            )
                         }
-                    )
 
-                    MenuTabPill(
-                        title = "Subtitle Style",
-                        badge = selectedSubtitleColorName,
-                        isSelected = activeMenuTab == MenuTab.SUBTITLE_SETTINGS,
-                        focusRequester = tabSubtitleSettingsFocusRequester,
-                        onFocusGained = {
-                            activeFocusArea = PlayerFocusArea.MENU_TABS
-                            activeMenuTab = MenuTab.SUBTITLE_SETTINGS
-                        },
-                        onClick = {
-                            activeMenuTab = MenuTab.SUBTITLE_SETTINGS
+                        item {
+                            MenuTabPill(
+                                title = "Playback Speed",
+                                badge = selectedSpeedLabel,
+                                isSelected = activeMenuTab == MenuTab.SPEED,
+                                focusRequester = tabSpeedFocusRequester,
+                                onFocusGained = {
+                                    activeFocusArea = PlayerFocusArea.MENU_TABS
+                                    activeMenuTab = MenuTab.SPEED
+                                },
+                                onClick = {
+                                    activeMenuTab = MenuTab.SPEED
+                                }
+                            )
                         }
-                    )
+
+                        item {
+                            MenuTabPill(
+                                title = "Subtitle Style",
+                                badge = selectedSubtitleColorName,
+                                isSelected = activeMenuTab == MenuTab.SUBTITLE_SETTINGS,
+                                focusRequester = tabSubtitleSettingsFocusRequester,
+                                isLast = true,
+                                onFocusGained = {
+                                    activeFocusArea = PlayerFocusArea.MENU_TABS
+                                    activeMenuTab = MenuTab.SUBTITLE_SETTINGS
+                                },
+                                onClick = {
+                                    activeMenuTab = MenuTab.SUBTITLE_SETTINGS
+                                }
+                            )
+                        }
+                    }
                 }
 
                 // LazyRow in Menu Content for all tabs
-                Box(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    when (activeMenuTab) {
-                        MenuTab.AUDIO -> {
-                            val audioOptions = remember(exoPlayer.currentTracks, selectedAudioLabel) {
-                                getAudioOptions(context, exoPlayer, trackSelector) {
-                                    selectedAudioLabel = it
+                CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        when (activeMenuTab) {
+                            MenuTab.AUDIO -> {
+                                val audioOptions = remember(exoPlayer.currentTracks, selectedAudioLabel) {
+                                    getAudioOptions(context, exoPlayer, trackSelector) {
+                                        selectedAudioLabel = it
+                                    }
                                 }
-                            }
 
-                            Column {
-                                Text(
-                                    text = "Audio",
-                                    color = Color.White,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(bottom = 10.dp)
-                                )
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    itemsIndexed(audioOptions) { index, option ->
-                                        OptionContentPill(
-                                            label = option.label,
-                                            isSelected = option.isSelected,
-                                            focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
-                                            onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
-                                            onClick = { option.onSelect() }
-                                        )
+                                Column {
+                                    Text(
+                                        text = "Audio",
+                                        color = Color.White,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 10.dp)
+                                    )
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        contentPadding = PaddingValues(
+                                            horizontal = 10.dp,
+                                            vertical = 6.dp
+                                        ),
+                                    ) {
+                                        itemsIndexed(audioOptions) { index, option ->
+                                            OptionContentPill(
+                                                label = option.label,
+                                                isSelected = option.isSelected,
+                                                focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
+                                                isFirst = index == 0,
+                                                isLast = index == audioOptions.size - 1,
+                                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                                onClick = { option.onSelect() }
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        MenuTab.SUBTITLE -> {
-                            val subtitleOptions = remember(exoPlayer.currentTracks, selectedSubtitleLabel) {
-                                getSubtitleOptions(context, exoPlayer, trackSelector) {
-                                    selectedSubtitleLabel = it
+                            MenuTab.SUBTITLE -> {
+                                val subtitleOptions = remember(exoPlayer.currentTracks, selectedSubtitleLabel) {
+                                    getSubtitleOptions(context, exoPlayer, trackSelector) {
+                                        selectedSubtitleLabel = it
+                                    }
                                 }
-                            }
 
-                            Column {
-                                Text(
-                                    text = "Subtitle",
-                                    color = Color.White,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(bottom = 10.dp)
-                                )
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    itemsIndexed(subtitleOptions) { index, option ->
-                                        OptionContentPill(
-                                            label = option.label,
-                                            isSelected = option.isSelected,
-                                            focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
-                                            onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
-                                            onClick = { option.onSelect() }
-                                        )
+                                Column {
+                                    Text(
+                                        text = "Subtitle",
+                                        color = Color.White,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 10.dp)
+                                    )
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        contentPadding = PaddingValues(
+                                            horizontal = 10.dp,
+                                            vertical = 6.dp
+                                        ),
+                                    ) {
+                                        itemsIndexed(subtitleOptions) { index, option ->
+                                            OptionContentPill(
+                                                label = option.label,
+                                                isSelected = option.isSelected,
+                                                focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
+                                                isFirst = index == 0,
+                                                isLast = index == subtitleOptions.size - 1,
+                                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                                onClick = { option.onSelect() }
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        MenuTab.RESOLUTION -> {
-                            val qualityOptions = remember(exoPlayer.currentTracks, selectedQualityLabel) {
-                                getQualityOptions(context, exoPlayer, trackSelector) {
-                                    selectedQualityLabel = it
+                            MenuTab.RESOLUTION -> {
+                                val qualityOptions = remember(exoPlayer.currentTracks, selectedQualityLabel) {
+                                    getQualityOptions(context, exoPlayer, trackSelector) {
+                                        selectedQualityLabel = it
+                                    }
                                 }
-                            }
 
-                            Column {
-                                Text(
-                                    text = "Resolution",
-                                    color = Color.White,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(bottom = 10.dp)
-                                )
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    itemsIndexed(qualityOptions) { index, option ->
-                                        OptionContentPill(
-                                            label = option.label,
-                                            isSelected = option.isSelected,
-                                            focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
-                                            onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
-                                            onClick = { option.onSelect() }
-                                        )
+                                Column {
+                                    Text(
+                                        text = "Resolution",
+                                        color = Color.White,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 10.dp)
+                                    )
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        contentPadding = PaddingValues(
+                                            horizontal = 10.dp,
+                                            vertical = 6.dp
+                                        ),
+                                    ) {
+                                        itemsIndexed(qualityOptions) { index, option ->
+                                            OptionContentPill(
+                                                label = option.label,
+                                                isSelected = option.isSelected,
+                                                focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
+                                                isFirst = index == 0,
+                                                isLast = index == qualityOptions.size - 1,
+                                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                                onClick = { option.onSelect() }
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        MenuTab.SPEED -> {
-                            val speedOptions = remember(selectedSpeedLabel) {
-                                getSpeedOptions(exoPlayer, selectedSpeedLabel) {
-                                    selectedSpeedLabel = it
+                            MenuTab.SERVER -> {
+                                val serverList = remember(currentActiveServer) {
+                                    TestingServers.getServers(currentActiveServer)
                                 }
-                            }
 
-                            Column {
-                                Text(
-                                    text = "Playback Speed",
-                                    color = Color.White,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(bottom = 10.dp)
-                                )
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    itemsIndexed(speedOptions) { index, option ->
-                                        OptionContentPill(
-                                            label = option.label,
-                                            isSelected = option.isSelected,
-                                            focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
-                                            onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
-                                            onClick = { option.onSelect() }
-                                        )
+                                Column {
+                                    Text(
+                                        text = "Server",
+                                        color = Color.White,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 10.dp)
+                                    )
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        contentPadding = PaddingValues(
+                                            horizontal = 10.dp,
+                                            vertical = 6.dp
+                                        ),
+                                    ) {
+                                        itemsIndexed(serverList) { index, serverItem ->
+                                            OptionContentPill(
+                                                label = serverItem.name,
+                                                isSelected = serverItem.active,
+                                                focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
+                                                isFirst = index == 0,
+                                                isLast = index == serverList.size - 1,
+                                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                                onClick = {
+                                                    if (currentActiveServer != serverItem.headerCode) {
+                                                        if (exoPlayer.currentPosition > 0L && exoPlayer.duration > 0L) {
+                                                            PlaybackProgressStore.saveProgress(
+                                                                context,
+                                                                id,
+                                                                exoPlayer.currentPosition / 1000L,
+                                                                exoPlayer.duration / 1000L
+                                                            )
+                                                        }
+                                                        currentActiveServer = serverItem.headerCode
+                                                        onServerSelected(serverItem)
+                                                    }
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        MenuTab.SUBTITLE_SETTINGS -> {
-                            SubtitleSettingsContent(
-                                selectedColorName = selectedSubtitleColorName,
-                                selectedBgColorName = selectedSubtitleBgColorName,
-                                selectedBgOpacity = selectedSubtitleBgOpacity,
-                                selectedSizeSp = selectedSubtitleFontSize,
-                                selectedSpacing = selectedSubtitleBottomSpacing,
-                                firstOptionFocusRequester = contentFirstOptionFocusRequester,
-                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
-                                onColorChanged = { name ->
-                                    selectedSubtitleColorName = name
-                                    PlayerPreferences.savePreferredSubtitleColor(context, name)
-                                },
-                                onBgColorChanged = { name ->
-                                    selectedSubtitleBgColorName = name
-                                    PlayerPreferences.savePreferredSubtitleBgColor(context, name)
-                                },
-                                onBgOpacityChanged = { opacity ->
-                                    selectedSubtitleBgOpacity = opacity
-                                    PlayerPreferences.savePreferredSubtitleBgOpacity(context, opacity)
-                                },
-                                onSizeChanged = { size ->
-                                    selectedSubtitleFontSize = size
-                                    PlayerPreferences.savePreferredSubtitleSize(context, size)
-                                },
-                                onSpacingChanged = { spacing ->
-                                    selectedSubtitleBottomSpacing = spacing
-                                    PlayerPreferences.savePreferredSubtitleSpacing(context, spacing)
+                            MenuTab.SPEED -> {
+                                val speedOptions = remember(selectedSpeedLabel) {
+                                    getSpeedOptions(exoPlayer, selectedSpeedLabel) {
+                                        selectedSpeedLabel = it
+                                    }
                                 }
-                            )
+
+                                Column {
+                                    Text(
+                                        text = "Playback Speed",
+                                        color = Color.White,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 10.dp)
+                                    )
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        contentPadding = PaddingValues(
+                                            horizontal = 10.dp,
+                                            vertical = 6.dp
+                                        ),
+                                    ) {
+                                        itemsIndexed(speedOptions) { index, option ->
+                                            OptionContentPill(
+                                                label = option.label,
+                                                isSelected = option.isSelected,
+                                                focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
+                                                isFirst = index == 0,
+                                                isLast = index == speedOptions.size - 1,
+                                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                                onClick = { option.onSelect() }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            MenuTab.SUBTITLE_SETTINGS -> {
+                                SubtitleSettingsContent(
+                                    selectedColorName = selectedSubtitleColorName,
+                                    selectedBgColorName = selectedSubtitleBgColorName,
+                                    selectedBgOpacity = selectedSubtitleBgOpacity,
+                                    selectedSizeSp = selectedSubtitleFontSize,
+                                    selectedSpacing = selectedSubtitleBottomSpacing,
+                                    firstOptionFocusRequester = contentFirstOptionFocusRequester,
+                                    onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                    onColorChanged = { name ->
+                                        selectedSubtitleColorName = name
+                                        PlayerPreferences.savePreferredSubtitleColor(context, name)
+                                    },
+                                    onBgColorChanged = { name ->
+                                        selectedSubtitleBgColorName = name
+                                        PlayerPreferences.savePreferredSubtitleBgColor(context, name)
+                                    },
+                                    onBgOpacityChanged = { opacity ->
+                                        selectedSubtitleBgOpacity = opacity
+                                        PlayerPreferences.savePreferredSubtitleBgOpacity(context, opacity)
+                                    },
+                                    onSizeChanged = { size ->
+                                        selectedSubtitleFontSize = size
+                                        PlayerPreferences.savePreferredSubtitleSize(context, size)
+                                    },
+                                    onSpacingChanged = { spacing ->
+                                        selectedSubtitleBottomSpacing = spacing
+                                        PlayerPreferences.savePreferredSubtitleSpacing(context, spacing)
+                                    }
+                                )
+                            }
+
+
                         }
                     }
                 }
@@ -1668,16 +1905,26 @@ private fun PlayPauseButton(
 }
 
 // When focus leaves tab buttons (Audio, Subtitle, Resolution, Speed), set background to transparent and text color to white
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MenuTabPill(
     title: String,
     badge: String?,
     isSelected: Boolean,
     focusRequester: FocusRequester,
+    isFirst: Boolean = false,
+    isLast: Boolean = false,
     onFocusGained: () -> Unit,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
 
     val bgColor = if (isFocused) Color.White else Color.Transparent
     val textColor = if (isFocused) Color.Black else Color.White
@@ -1686,6 +1933,7 @@ private fun MenuTabPill(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
+            .bringIntoViewRequester(bringIntoViewRequester)
             .focusRequester(focusRequester)
             .onFocusChanged {
                 isFocused = it.isFocused
@@ -1699,15 +1947,19 @@ private fun MenuTabPill(
                 shape = RoundedCornerShape(8.dp)
             )
             .onPreviewKeyEvent { event ->
-                if (
-                    event.type == KeyEventType.KeyDown &&
-                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)
-                ) {
-                    onClick()
-                    true
-                } else {
-                    false
+                if (event.type == KeyEventType.KeyDown) {
+                    if (isFirst && event.key == Key.DirectionLeft) {
+                        return@onPreviewKeyEvent true
+                    }
+                    if (isLast && event.key == Key.DirectionRight) {
+                        return@onPreviewKeyEvent true
+                    }
+                    if (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) {
+                        onClick()
+                        return@onPreviewKeyEvent true
+                    }
                 }
+                false
             }
             .clickable { onClick() }
             .padding(horizontal = 20.dp, vertical = 10.dp)
@@ -1731,21 +1983,32 @@ private fun MenuTabPill(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun OptionContentPill(
     label: String,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
+    isFirst: Boolean = false,
+    isLast: Boolean = false,
     onFocusGained: () -> Unit,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val requester = focusRequester ?: remember { FocusRequester() }
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
         modifier = Modifier
+            .bringIntoViewRequester(bringIntoViewRequester)
             .focusRequester(requester)
             .onFocusChanged {
                 isFocused = it.isFocused
@@ -1770,15 +2033,19 @@ private fun OptionContentPill(
             )
             .clickable { onClick() }
             .onPreviewKeyEvent { event ->
-                if (
-                    event.type == KeyEventType.KeyDown &&
-                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)
-                ) {
-                    onClick()
-                    true
-                } else {
-                    false
+                if (event.type == KeyEventType.KeyDown) {
+                    if (isFirst && event.key == Key.DirectionLeft) {
+                        return@onPreviewKeyEvent true
+                    }
+                    if (isLast && event.key == Key.DirectionRight) {
+                        return@onPreviewKeyEvent true
+                    }
+                    if (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) {
+                        onClick()
+                        return@onPreviewKeyEvent true
+                    }
                 }
+                false
             }
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
@@ -2304,6 +2571,7 @@ private fun getSubtitleBgColor(colorName: String, opacity: Float): Int {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SubtitleSettingsContent(
     selectedColorName: String,
@@ -2342,11 +2610,11 @@ private fun SubtitleSettingsContent(
     data class SubtitleOpacityItem(val label: String, val opacity: Float)
     val opacityItems = remember {
         listOf(
-            SubtitleOpacityItem("1", 1.0f),
-            SubtitleOpacityItem("0.75", 0.75f),
-            SubtitleOpacityItem("0.5", 0.5f),
+            SubtitleOpacityItem("0", 0.0f),
             SubtitleOpacityItem("0.25", 0.25f),
-            SubtitleOpacityItem("0", 0.0f)
+            SubtitleOpacityItem("0.5", 0.5f),
+            SubtitleOpacityItem("0.75", 0.75f),
+            SubtitleOpacityItem("1", 1.0f)
         )
     }
 
@@ -2382,155 +2650,160 @@ private fun SubtitleSettingsContent(
             modifier = Modifier.padding(bottom = 10.dp)
         )
 
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            // Section 1: Color (Text Color)
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "Color:",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                    colorItems.forEachIndexed { index, item ->
-                        ColorOptionPill(
-                            name = item.name,
-                            color = item.color,
-                            isSelected = selectedColorName.equals(item.name, ignoreCase = true),
-                            focusRequester = if (index == 0) firstOptionFocusRequester else null,
-                            onFocusGained = onFocusGained,
-                            onSelect = { onColorChanged(item.name) }
+        CompositionLocalProvider(LocalBringIntoViewSpec provides CenterBringIntoViewSpec) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+//                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Section 1: Color (Text Color)
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Color:",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(end = 4.dp)
                         )
+                        colorItems.forEachIndexed { index, item ->
+                            ColorOptionPill(
+                                name = item.name,
+                                color = item.color,
+                                isSelected = selectedColorName.equals(item.name, ignoreCase = true),
+                                focusRequester = if (index == 0) firstOptionFocusRequester else null,
+                                isFirst = index == 0,
+                                onFocusGained = onFocusGained,
+                                onSelect = { onColorChanged(item.name) }
+                            )
+                        }
                     }
                 }
-            }
 
-            // Section 2: Background Color
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "Bg Color:",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                    bgColorItems.forEach { item ->
-                        ColorOptionPill(
-                            name = item.name,
-                            color = item.color,
-                            isSelected = selectedBgColorName.equals(item.name, ignoreCase = true),
-                            onFocusGained = onFocusGained,
-                            onSelect = { onBgColorChanged(item.name) }
+                // Section 2: Background Color
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Bg Color:",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(end = 4.dp)
                         )
+                        bgColorItems.forEach { item ->
+                            ColorOptionPill(
+                                name = item.name,
+                                color = item.color,
+                                isSelected = selectedBgColorName.equals(item.name, ignoreCase = true),
+                                onFocusGained = onFocusGained,
+                                onSelect = { onBgColorChanged(item.name) }
+                            )
+                        }
                     }
                 }
-            }
 
-            // Section 3: Background Opacity
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "Opacity:",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                    opacityItems.forEach { item ->
-                        SubtitleSmallOptionPill(
-                            label = item.label,
-                            isSelected = kotlin.math.abs(selectedBgOpacity - item.opacity) < 0.05f,
-                            onFocusGained = onFocusGained,
-                            onClick = { onBgOpacityChanged(item.opacity) }
+                // Section 3: Background Opacity
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Opacity:",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(end = 4.dp)
                         )
+                        opacityItems.forEach { item ->
+                            SubtitleSmallOptionPill(
+                                label = item.label,
+                                isSelected = kotlin.math.abs(selectedBgOpacity - item.opacity) < 0.05f,
+                                onFocusGained = onFocusGained,
+                                onClick = { onBgOpacityChanged(item.opacity) }
+                            )
+                        }
                     }
                 }
-            }
 
-            // Section 4: Font Size
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "Size:",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                    sizeItems.forEach { item ->
-                        SubtitleSmallOptionPill(
-                            label = item.label,
-                            isSelected = kotlin.math.abs(selectedSizeSp - item.size) < 0.5f,
-                            onFocusGained = onFocusGained,
-                            onClick = { onSizeChanged(item.size) }
+                // Section 4: Font Size
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Size:",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(end = 4.dp)
                         )
+                        sizeItems.forEach { item ->
+                            SubtitleSmallOptionPill(
+                                label = item.label,
+                                isSelected = kotlin.math.abs(selectedSizeSp - item.size) < 0.5f,
+                                onFocusGained = onFocusGained,
+                                onClick = { onSizeChanged(item.size) }
+                            )
+                        }
                     }
                 }
-            }
 
-            // Section 5: Bottom Margin
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "Bottom Margin:",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                    spacingItems.forEach { item ->
-                        SubtitleSmallOptionPill(
-                            label = item.label,
-                            isSelected = kotlin.math.abs(selectedSpacing - item.spacing) < 0.5f,
-                            onFocusGained = onFocusGained,
-                            onClick = { onSpacingChanged(item.spacing) }
+                // Section 5: Bottom Margin
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Bottom Margin:",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(end = 4.dp)
                         )
+                        spacingItems.forEachIndexed { index, item ->
+                            SubtitleSmallOptionPill(
+                                label = item.label,
+                                isSelected = kotlin.math.abs(selectedSpacing - item.spacing) < 0.5f,
+                                isLast = index == spacingItems.size - 1,
+                                onFocusGained = onFocusGained,
+                                onClick = { onSpacingChanged(item.spacing) }
+                            )
+                        }
                     }
                 }
             }
@@ -2538,21 +2811,32 @@ private fun SubtitleSettingsContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ColorOptionPill(
     name: String,
     color: Color,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
+    isFirst: Boolean = false,
+    isLast: Boolean = false,
     onFocusGained: () -> Unit,
     onSelect: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
         modifier = Modifier
+            .bringIntoViewRequester(bringIntoViewRequester)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged {
                 isFocused = it.isFocused
@@ -2577,15 +2861,19 @@ private fun ColorOptionPill(
             )
             .clickable { onSelect() }
             .onPreviewKeyEvent { event ->
-                if (
-                    event.type == KeyEventType.KeyDown &&
-                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)
-                ) {
-                    onSelect()
-                    true
-                } else {
-                    false
+                if (event.type == KeyEventType.KeyDown) {
+                    if (isFirst && event.key == Key.DirectionLeft) {
+                        return@onPreviewKeyEvent true
+                    }
+                    if (isLast && event.key == Key.DirectionRight) {
+                        return@onPreviewKeyEvent true
+                    }
+                    if (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) {
+                        onSelect()
+                        return@onPreviewKeyEvent true
+                    }
                 }
+                false
             }
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
@@ -2611,6 +2899,8 @@ private fun SubtitleSmallOptionPill(
     label: String,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
+    isFirst: Boolean = false,
+    isLast: Boolean = false,
     onFocusGained: () -> Unit,
     onClick: () -> Unit
 ) {
@@ -2618,6 +2908,8 @@ private fun SubtitleSmallOptionPill(
         label = label,
         isSelected = isSelected,
         focusRequester = focusRequester,
+        isFirst = isFirst,
+        isLast = isLast,
         onFocusGained = onFocusGained,
         onClick = onClick
     )

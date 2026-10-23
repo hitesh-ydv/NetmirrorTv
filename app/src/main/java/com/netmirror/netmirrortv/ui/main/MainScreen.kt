@@ -25,23 +25,78 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.netmirror.netmirrortv.datastore.AppPreferences
+import com.netmirror.netmirrortv.model.UpdateMessageResponse
+import com.netmirror.netmirrortv.network.ApiClient
+import com.netmirror.netmirrortv.network.BaseUrlProvider
 import com.netmirror.netmirrortv.ui.components.AccountDialog
 import com.netmirror.netmirrortv.ui.components.AppToast
 import com.netmirror.netmirrortv.ui.components.NavbarViewModel
+import com.netmirror.netmirrortv.ui.components.UpdateDialog
+import com.netmirror.netmirrortv.util.TokenStore
+import com.netmirror.netmirrortv.utils.AppSession
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun MainScreen(
     appNavController: NavHostController
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isRedirectingToOtp by remember { mutableStateOf(false) }
+
+    fun checkTokenAndNavigate() {
+        if (isRedirectingToOtp) return
+        val hasToken = !TokenStore.getUserToken(context).isNullOrBlank()
+        if (!hasToken) {
+            isRedirectingToOtp = true
+            val baseUrl = BaseUrlProvider.getBaseUrl()
+            appNavController.navigate(Routes.otp(baseUrl)) {
+                popUpTo(Routes.MAIN) { inclusive = true }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        checkTokenAndNavigate()
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                checkTokenAndNavigate()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    if (isRedirectingToOtp) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        )
+        return
+    }
 
     val navController = rememberNavController()
+    val coroutineScope = rememberCoroutineScope()
 
     val homeViewModel: HomeViewModel = viewModel()
     val homeError by homeViewModel.error.collectAsState()
@@ -51,6 +106,50 @@ fun MainScreen(
 
     var showAccountDialog by remember { mutableStateOf(false) }
     var wasAccountDialogOpened by remember { mutableStateOf(false) }
+
+    var updateDialogData by remember { mutableStateOf<UpdateMessageResponse?>(null) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
+
+    suspend fun checkUpdate() {
+        if (AppSession.hasShownUpdateDialog) return
+
+        val prefs = AppPreferences(context)
+        val apiVer = AppSession.currentApiVersion().ifBlank { prefs.getApiVersion() }.trim()
+        val appVer = AppSession.currentAppVersion().ifBlank { prefs.getAppVersion() }.trim()
+
+        if (apiVer.isNotBlank() && appVer.isNotBlank() && apiVer != appVer) {
+            try {
+                val baseUrl = BaseUrlProvider.getBaseUrl().ifBlank { prefs.getBaseUrl() }
+                if (baseUrl.isNotBlank()) {
+                    val response = ApiClient.create(baseUrl).getUpdateMessage()
+                    if (response.isSuccessful && response.body() != null) {
+                        AppSession.cachedUpdateData = response.body()
+                        updateDialogData = response.body()
+                        showUpdateDialog = true
+                    } else if (AppSession.cachedUpdateData != null) {
+                        updateDialogData = AppSession.cachedUpdateData
+                        showUpdateDialog = true
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                if (AppSession.cachedUpdateData != null) {
+                    updateDialogData = AppSession.cachedUpdateData
+                    showUpdateDialog = true
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        checkUpdate()
+    }
+
+    LaunchedEffect(Unit) {
+        AppSession.updateCheckTrigger.collect {
+            checkUpdate()
+        }
+    }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: Routes.HOME
@@ -66,21 +165,18 @@ fun MainScreen(
     }
 
     val onSelectTab: (Int) -> Unit = { index ->
-        // IMPORTANT
         selectedIndex = index
-        TvFocusManager.lastFocusedContentRequester = null
-        TvFocusManager.lastFocusedHomeCardId = null
-        TvFocusManager.lastFocusedHomeRowPosition = null
-        TvFocusManager.isCarouselLastFocused = false
-        TvFocusManager.lastFocusedSearchCardId = null
-        TvFocusManager.currentScreenContentRequester = null
-        TvFocusManager.firstCardRequester = null
-        TvFocusManager.rowFocusRequesters.clear()
 
         when (index) {
             // Home
             0 -> {
-                homeViewModel.loadHome("all")
+                if (homeViewModel.page.value != "all") {
+                    homeViewModel.loadHome("all")
+                    TvFocusManager.lastFocusedContentRequester = null
+                    TvFocusManager.lastFocusedHomeCardId = null
+                    TvFocusManager.lastFocusedHomeRowPosition = null
+                    TvFocusManager.isCarouselLastFocused = false
+                }
 
                 if (currentRoute != Routes.HOME) {
                     navController.navigate(Routes.HOME) {
@@ -95,7 +191,13 @@ fun MainScreen(
 
             // TV Shows
             1 -> {
-                homeViewModel.loadHome("show")
+                if (homeViewModel.page.value != "show") {
+                    homeViewModel.loadHome("show")
+                    TvFocusManager.lastFocusedContentRequester = null
+                    TvFocusManager.lastFocusedHomeCardId = null
+                    TvFocusManager.lastFocusedHomeRowPosition = null
+                    TvFocusManager.isCarouselLastFocused = false
+                }
 
                 if (currentRoute != Routes.HOME) {
                     navController.navigate(Routes.HOME) {
@@ -110,7 +212,13 @@ fun MainScreen(
 
             // Movies
             2 -> {
-                homeViewModel.loadHome("movie")
+                if (homeViewModel.page.value != "movie") {
+                    homeViewModel.loadHome("movie")
+                    TvFocusManager.lastFocusedContentRequester = null
+                    TvFocusManager.lastFocusedHomeCardId = null
+                    TvFocusManager.lastFocusedHomeRowPosition = null
+                    TvFocusManager.isCarouselLastFocused = false
+                }
 
                 if (currentRoute != Routes.HOME) {
                     navController.navigate(Routes.HOME) {
@@ -125,6 +233,7 @@ fun MainScreen(
 
             // Search
             3 -> {
+                TvFocusManager.lastFocusedSearchCardId = null
                 if (currentRoute != Routes.SEARCH) {
                     navController.navigate(Routes.SEARCH) {
                         popUpTo(navController.graph.findStartDestination().id) {
@@ -222,6 +331,32 @@ fun MainScreen(
                     TvFocusManager.restoreAccountFocus()
                 }
             )
+        }
+
+        val currentUpdateData = updateDialogData
+        AnimatedVisibility(
+            visible = showUpdateDialog && currentUpdateData != null,
+            enter = fadeIn(tween(240, easing = FastOutSlowInEasing)) +
+                    scaleIn(initialScale = 0.92f, animationSpec = tween(240, easing = FastOutSlowInEasing)),
+            exit = fadeOut(tween(180, easing = FastOutSlowInEasing)) +
+                    scaleOut(targetScale = 0.92f, animationSpec = tween(180, easing = FastOutSlowInEasing))
+        ) {
+            if (currentUpdateData != null) {
+                UpdateDialog(
+                    updateData = currentUpdateData,
+                    onDismiss = {
+                        AppSession.hasShownUpdateDialog = true
+                        showUpdateDialog = false
+                        coroutineScope.launch {
+                            repeat(12) { attempt ->
+                                val success = TvFocusManager.focusCarouselDirectly()
+                                if (success) return@launch
+                                delay(35L * (attempt + 1))
+                            }
+                        }
+                    }
+                )
+            }
         }
     }
 }

@@ -26,7 +26,7 @@ class SplashRepository (
 
                 val serverUrl = decode(encoded)
 
-                val endpoint = decode("L2NoZWNrbmV3dHYucGhw") // /checknewtv.php
+                val endpoint = decode("L2NoZWNrdHYtdmVyLnBocA==") // /checktv-ver.php
 
                 val response = ApiClient
                     .create(serverUrl)
@@ -36,11 +36,23 @@ class SplashRepository (
 
                 if (response.isSuccessful) {
 
-                    val tokenHash = response.body()?.tokenHash
+                    val body = response.body()
+                    val tokenHash = body?.tokenHash
+                    val apiVersion = body?.apiVersion
+
+                    if (!apiVersion.isNullOrBlank()) {
+                        AppSession.setApiVersion(apiVersion)
+                        preferences.saveApiVersion(apiVersion)
+                    }
+                    AppSession.setAppVersion(Constants.APP_VERSION)
+                    preferences.saveAppVersion(Constants.APP_VERSION)
+                    AppSession.resetUpdateDialogState()
 
                     if (!tokenHash.isNullOrEmpty()) {
 
                         val baseUrl = decode(tokenHash)
+
+                        Log.d("BASEURLS", "Main url -----  $baseUrl")
 
                         BaseUrlProvider.setBaseUrl(baseUrl)
                         AppSession.setBaseUrl(baseUrl)

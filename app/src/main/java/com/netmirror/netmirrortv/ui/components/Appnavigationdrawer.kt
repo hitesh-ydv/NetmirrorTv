@@ -10,8 +10,11 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -51,23 +54,36 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
@@ -230,6 +246,12 @@ fun AppModalNavigationDrawer(
                         showLabel = isDrawerExpanded,
                         onClick = {
                             onItemSelected(originalIndex)
+                            coroutineScope.launch {
+                                repeat(12) { attempt ->
+                                    if (TvFocusManager.moveFocusToContent()) return@launch
+                                    delay(25L * (attempt + 1))
+                                }
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -384,65 +406,225 @@ private fun DrawerAccountLogo(
     val shape = RoundedCornerShape(3.dp)
 
     Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .padding(start = 10.dp)
-            .focusRequester(accountRequester)
-            .onFocusChanged {
-                isFocused = it.isFocused
-                onFocusChanged(it.isFocused)
-            }
+        modifier = Modifier.padding(start = 10.dp),
+        contentAlignment = Alignment.TopStart
+    ) {
+        // Tooltip Overlay placed directly above the account logo button
+        AnimatedVisibility(
+            visible = isFocused,
+            enter = fadeIn(tween(140)) + scaleIn(
+                initialScale = 0.88f,
+                animationSpec = tween(140, easing = FastOutSlowInEasing)
+            ),
+            exit = fadeOut(tween(100)),
+            modifier = Modifier
+                .zIndex(10f)
+                .layout { measurable, _ ->
+                    // Measure unconstrained so it is never squeezed by the narrow collapsed drawer
+                    val placeable = measurable.measure(
+                        Constraints(
+                            minWidth = 0,
+                            maxWidth = Constraints.Infinity,
+                            minHeight = 0,
+                            maxHeight = Constraints.Infinity
+                        )
+                    )
+                    // Report 0x0 so parent Box size is 100% determined by the button itself
+                    layout(0, 0) {
+                        // Place directly above the button at the bottom of the drawer:
+                        // -10.dp x-offset aligns with the drawer content boundary and centers over button
+                        // -(placeable.height + 6.dp) places the arrow tip 6dp above the top of the button
+                        placeable.placeRelative(
+                            x = (-10).dp.roundToPx(),
+                            y = -(placeable.height + 6.dp.roundToPx())
+                        )
+                    }
+                }
+        ) {
+            AccountLogoTooltip(
+                text = "My Profile",
+                arrowCenterX = 29.dp // 29dp from tooltip start points exactly at the 19dp center of the 38dp button (-10dp + 29dp = 19dp)
+            )
+        }
+
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .focusRequester(accountRequester)
+                .onFocusChanged {
+                    isFocused = it.isFocused
+                    onFocusChanged(it.isFocused)
+                }
 //            .graphicsLayer {
 //                scaleX = scale
 //                scaleY = scale
 //            }
-            .clip(shape)
-            .background(backgroundColor)
-            .border(1.dp, borderColor, shape)
-            .clickable(onClick = onClick)
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown) {
-                    when (event.key) {
-                        Key.DirectionRight -> {
-                            if (!TvFocusManager.moveFocusToContent()) {
-                                coroutineScope.launch {
-                                    repeat(12) { attempt ->
-                                        if (TvFocusManager.moveFocusToContent()) return@launch
-                                        delay(25L * (attempt + 1))
+                .clip(shape)
+                .background(backgroundColor)
+                .border(1.dp, borderColor, shape)
+                .clickable(onClick = onClick)
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.key) {
+                            Key.DirectionRight -> {
+                                if (!TvFocusManager.moveFocusToContent()) {
+                                    coroutineScope.launch {
+                                        repeat(12) { attempt ->
+                                            if (TvFocusManager.moveFocusToContent()) return@launch
+                                            delay(25L * (attempt + 1))
+                                        }
                                     }
                                 }
+                                true
                             }
-                            true
+                            Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                                onClick()
+                                true
+                            }
+                            else -> false
                         }
-                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                            onClick()
-                            true
-                        }
-                        else -> false
-                    }
-                } else false
-            }
-            .focusable()
-            .padding(3.dp)
-    ) {
-        var isLoaded by remember(url) { mutableStateOf(false) }
+                    } else false
+                }
+                .focusable()
+                .padding(3.dp)
+        ) {
+            var isLoaded by remember(url) { mutableStateOf(false) }
 
-        AsyncImage(
-            model = url,
-            contentDescription = "My Account",
-            onState = { state ->
-                isLoaded = state is AsyncImagePainter.State.Success
-            },
-            modifier = Modifier
-                .width(32.dp)
-                .height(32.dp)
-                .clip(shape)
-                .background(
-                    color = if (isLoaded) Color.Transparent else DRAWER_LOGO_PLACEHOLDER_COLOR,
-                    shape = shape,
-                ),
-            contentScale = ContentScale.Crop
+            AsyncImage(
+                model = url,
+                contentDescription = "My Account",
+                onState = { state ->
+                    isLoaded = state is AsyncImagePainter.State.Success
+                },
+                modifier = Modifier
+                    .width(32.dp)
+                    .height(32.dp)
+                    .clip(shape)
+                    .background(
+                        color = if (isLoaded) Color.Transparent else DRAWER_LOGO_PLACEHOLDER_COLOR,
+                        shape = shape,
+                    ),
+                contentScale = ContentScale.Crop
+            )
+        }
+    }
+}
+
+/**
+ * Sleek tooltip overlay badge displayed above the account logo button on focus.
+ */
+@Composable
+private fun AccountLogoTooltip(
+    text: String,
+    arrowCenterX: Dp = 29.dp,
+    modifier: Modifier = Modifier
+) {
+    val arrowHeight = 6.dp
+    val shape = remember(arrowCenterX) {
+        TooltipShape(
+            cornerRadius = 6.dp,
+            arrowWidth = 10.dp,
+            arrowHeight = arrowHeight,
+            arrowCenterX = arrowCenterX
         )
+    }
+
+    Box(
+        modifier = modifier
+            .shadow(
+                elevation = 10.dp,
+                shape = shape,
+                spotColor = Color.Black.copy(alpha = 0.65f)
+            )
+            .background(Color(0xFF222228), shape = shape)
+            .border(
+                width = 1.dp,
+                color = Color.White.copy(alpha = 0.22f),
+                shape = shape
+            )
+            .padding(
+                start = 10.dp,
+                end = 10.dp,
+                top = 5.dp,
+                bottom = 5.dp + arrowHeight
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            softWrap = false
+        )
+    }
+}
+
+/**
+ * Custom tooltip bubble shape with rounded corners and a bottom-pointing arrow.
+ */
+private class TooltipShape(
+    private val cornerRadius: Dp = 6.dp,
+    private val arrowWidth: Dp = 10.dp,
+    private val arrowHeight: Dp = 6.dp,
+    private val arrowCenterX: Dp? = null
+) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline {
+        val cr = with(density) { cornerRadius.toPx() }
+        val aw = with(density) { arrowWidth.toPx() }
+        val ah = with(density) { arrowHeight.toPx() }
+        val bubbleBottom = size.height - ah
+
+        val arrowCenter = if (arrowCenterX != null) {
+            with(density) { arrowCenterX.toPx() }
+        } else {
+            size.width / 2f
+        }
+        val arrowLeft = (arrowCenter - aw / 2f).coerceIn(cr, size.width - cr - aw)
+        val arrowRight = arrowLeft + aw
+        val arrowTip = arrowCenter.coerceIn(cr + aw / 4f, size.width - cr - aw / 4f)
+
+        val path = Path().apply {
+            moveTo(cr, 0f)
+            lineTo(size.width - cr, 0f)
+            arcTo(
+                rect = Rect(size.width - 2 * cr, 0f, size.width, 2 * cr),
+                startAngleDegrees = -90f,
+                sweepAngleDegrees = 90f,
+                forceMoveTo = false
+            )
+            lineTo(size.width, bubbleBottom - cr)
+            arcTo(
+                rect = Rect(size.width - 2 * cr, bubbleBottom - 2 * cr, size.width, bubbleBottom),
+                startAngleDegrees = 0f,
+                sweepAngleDegrees = 90f,
+                forceMoveTo = false
+            )
+            lineTo(arrowRight, bubbleBottom)
+            lineTo(arrowTip, size.height)
+            lineTo(arrowLeft, bubbleBottom)
+            lineTo(cr, bubbleBottom)
+            arcTo(
+                rect = Rect(0f, bubbleBottom - 2 * cr, 2 * cr, bubbleBottom),
+                startAngleDegrees = 90f,
+                sweepAngleDegrees = 90f,
+                forceMoveTo = false
+            )
+            lineTo(0f, cr)
+            arcTo(
+                rect = Rect(0f, 0f, 2 * cr, 2 * cr),
+                startAngleDegrees = 180f,
+                sweepAngleDegrees = 90f,
+                forceMoveTo = false
+            )
+            close()
+        }
+        return Outline.Generic(path)
     }
 }
 

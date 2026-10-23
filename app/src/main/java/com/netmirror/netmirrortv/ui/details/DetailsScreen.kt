@@ -362,35 +362,42 @@ private fun DetailsContent(
                             .fillMaxSize()
                     )
 
-                    // Horizontal Gradient
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
-                                Brush.horizontalGradient(
+                                Brush.linearGradient(
                                     colors = listOf(
                                         Color.Black.copy(alpha = 0.92f),
                                         Color.Black.copy(alpha = 0.70f),
-                                        Color.Black.copy(alpha = 0.30f),
+                                        Color.Black.copy(alpha = 0.50f),
                                         Color.Transparent
+                                    ),
+                                    start = Offset(
+                                        x = 0f,
+                                        y = Float.POSITIVE_INFINITY
+                                    ),
+                                    end = Offset(
+                                        x = Float.POSITIVE_INFINITY,
+                                        y = 0f
                                     )
                                 )
                             )
                     )
 
-                    // Vertical Gradient
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        Color.Black.copy(alpha = 0.85f)
-                                    )
-                                )
-                            )
-                    )
+//                    // Vertical Gradient
+//                    Box(
+//                        modifier = Modifier
+//                            .fillMaxSize()
+//                            .background(
+//                                Brush.verticalGradient(
+//                                    colors = listOf(
+//                                        Color.Transparent,
+//                                        Color.Black.copy(alpha = 0.85f)
+//                                    )
+//                                )
+//                            )
+//                    )
 
                     // ===========================
                     // Bottom Left Content
@@ -469,11 +476,7 @@ private fun DetailsContent(
                             data.hdsd?.let { MetaBadge(it) }
 
                             data.runtime?.let {
-                                Text(
-                                    text = it,
-                                    color = Color.White.copy(alpha = 0.75f),
-                                    fontSize = 15.sp
-                                )
+                                MetaBadge(it)
                             }
                         }
 
@@ -1629,7 +1632,7 @@ private val POSTER_PLACEHOLDER = Regex("-{3,}")
 private fun resolveCardImageUrl(template: String?, id: String): String =
     template?.replace(POSTER_PLACEHOLDER, id).orEmpty()
 
-private const val MoreLikeLandscapeFullCardsCount = 4
+private const val MoreLikeLandscapeFullCardsCount = 5
 private const val MoreLikePortraitFullCardsCount = 5
 private const val MoreLikeCardPeekFraction = 0.25f
 

@@ -81,8 +81,8 @@ object PlayerPreferences {
     }
 
     fun getPreferredSubtitleSpacing(context: Context): Float {
-        val saved = prefs(context).getFloat(KEY_SUBTITLE_SPACING, 40f)
+        val saved = prefs(context).getFloat(KEY_SUBTITLE_SPACING, 0f)
         val validSpacings = floatArrayOf(0f, 20f, 40f, 60f, 80f, 100f)
-        return if (validSpacings.any { kotlin.math.abs(it - saved) < 0.5f }) saved else 40f
+        return if (validSpacings.any { kotlin.math.abs(it - saved) < 0.5f }) saved else 0f
     }
 }

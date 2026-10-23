@@ -5,6 +5,8 @@ import com.google.gson.annotations.SerializedName
 data class TokenResponse(
 
     @SerializedName("token_hash")
-    val tokenHash: String?
+    val tokenHash: String?,
 
+    @SerializedName("var")
+    val apiVersion: String? = null
 )

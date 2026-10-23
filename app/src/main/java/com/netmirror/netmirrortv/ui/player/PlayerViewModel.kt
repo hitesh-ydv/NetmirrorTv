@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 
 sealed class PlayerUiState {
     object Loading : PlayerUiState()
-    data class Success(val response: PlayerResponse) : PlayerUiState()
+    data class Success(val response: PlayerResponse, val server: String = "S1") : PlayerUiState()
     data class Error(val message: String) : PlayerUiState()
 }
 
@@ -29,10 +29,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
     private var loadedId: String? = null
+    var currentServer: String = "S1"
+        private set
 
-    fun loadStream(id: String, force: Boolean = false) {
-        if (!force && id == loadedId && _uiState.value is PlayerUiState.Success) return
+    fun loadStream(id: String, server: String = currentServer, force: Boolean = false) {
+        if (!force && id == loadedId && server == currentServer && _uiState.value is PlayerUiState.Success) return
 
+        currentServer = server
         viewModelScope.launch {
             _uiState.value = PlayerUiState.Loading
 
@@ -51,13 +54,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 api.getPlayer(
                     id = id,
                     ott = ott,
+                    server = server,
                     userToken = userToken
                 )
             }.onSuccess { response ->
                 val streamUrl = response.playUrl
                 if (!streamUrl.isNullOrBlank()) {
                     loadedId = id
-                    _uiState.value = PlayerUiState.Success(response)
+                    _uiState.value = PlayerUiState.Success(response, server = server)
                 } else if (!response.error.isNullOrBlank()) {
                     _uiState.value = PlayerUiState.Error(response.error)
                 } else {

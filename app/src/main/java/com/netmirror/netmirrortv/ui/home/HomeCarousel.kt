@@ -194,7 +194,10 @@ fun HomeCarousel(
                             event.type == KeyEventType.KeyDown &&
                                     event.key == Key.DirectionDown -> {
                                 TvFocusManager.isCarouselLastFocused = false
-                                val focused = TvFocusManager.requestFocus(firstCardRequester) ||
+                                val rowZeroRequester = TvFocusManager.rowFocusRequesters[0]
+                                val focused = (TvFocusManager.focusFirstRow?.invoke() == true) ||
+                                        TvFocusManager.requestFocus(rowZeroRequester) ||
+                                        TvFocusManager.requestFocus(firstCardRequester) ||
                                         TvFocusManager.requestFocus(TvFocusManager.firstCardRequester)
                                 if (focused) {
                                     true
