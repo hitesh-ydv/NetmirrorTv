@@ -41,6 +41,10 @@ class SplashViewModel(
         }
     }
 
+    fun retry() {
+        checkServer()
+    }
+
     private fun showSuccess() {
         _uiState.value = SplashUiState(
             isLoading = false,

@@ -4,14 +4,21 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,236 +26,386 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.WifiOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.netmirror.netmirrortv.R
 import com.netmirror.netmirrortv.navigation.Routes
 import com.netmirror.netmirrortv.network.BaseUrlProvider
 import com.netmirror.netmirrortv.util.TokenStore
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.cos
+import kotlin.math.sin
 
-import android.widget.Toast
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
-
-import com.netmirror.netmirrortv.ui.components.AppToast
-
-// Static brushes — allocated once per process, never touched by the
-// animation loop. Only opacity/scale/position are animated on top of these.
-private val GlowBrush = Brush.radialGradient(
-    colors = listOf(Color(0xFF414141).copy(alpha = 0.35f), Color.Transparent)
-)
+private val NetmirrorRed = Color(0xFFE50914)
+private val PureBlack = Color(0xFF000000)
 
 @Composable
 fun SplashScreen(
     navController: NavHostController,
     viewModel: SplashViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
-
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
-    // API call sirf ek baar
+    // Spring jump and entrance animatables
+    val jumpOffsetY = remember { Animatable(-320f) }
+    val logoAlpha = remember { Animatable(0f) }
+    val exitAlpha = remember { Animatable(1f) }
+
+    // Kick off startup server checks
     LaunchedEffect(Unit) {
         viewModel.checkServer()
     }
 
-    LaunchedEffect(uiState.error) {
-        if (uiState.error != null) {
-            Toast.makeText(
-                context,
-                "Internet Error\nDownload Updated app from netmirror.gg",
-                Toast.LENGTH_LONG
-            ).show()
+    // Spring drop from top to center
+    LaunchedEffect(Unit) {
+        launch {
+            logoAlpha.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 350, easing = LinearEasing)
+            )
+        }
+        launch {
+            jumpOffsetY.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessLow
+                )
+            )
         }
     }
 
+    // Subtle heartbeat pulse rhythm on the logo
+    val transition = rememberInfiniteTransition(label = "logoHeartbeatTransition")
+    val heartbeatScale by transition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = 1500
+                1.0f at 0 using FastOutSlowInEasing
+                1.050f at 160 using FastOutSlowInEasing  // First systolic beat
+                1.010f at 300 using FastOutSlowInEasing  // Dip
+                1.035f at 440 using FastOutSlowInEasing  // Second diastolic beat
+                1.0f at 660 using FastOutSlowInEasing    // Baseline return
+                1.0f at 1500                             // Rest period before next beat
+            },
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "logoHeartbeatScale"
+    )
+
+    // Smooth navigation to Home screen on success
     LaunchedEffect(uiState.isSuccess) {
         if (uiState.isSuccess) {
-            val hasToken = !TokenStore.getUserToken(context).isNullOrBlank()
+            delay(180)
+            exitAlpha.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
+            )
 
+            val hasToken = !TokenStore.getUserToken(context).isNullOrBlank()
             if (hasToken) {
                 navController.navigate(Routes.MAIN) {
-                    popUpTo(Routes.SPLASH) { inclusive = true }
+                    popUpTo(Routes.SPLASH) { this.inclusive = true }
                 }
             } else {
                 val baseUrl = BaseUrlProvider.getBaseUrl()
                 navController.navigate(Routes.otp(baseUrl)) {
-                    popUpTo(Routes.SPLASH) { inclusive = true }
+                    popUpTo(Routes.SPLASH) { this.inclusive = true }
                 }
             }
         }
     }
 
-
-    val transition = rememberInfiniteTransition(label = "splashLoop")
-
-    val breatheScale by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "breatheScale"
-    )
-
+    // Fullscreen Dark Container
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-
-            Box(contentAlignment = Alignment.Center) {
-                GlowPulse(breatheScale)
-                BreathingLogo(breatheScale = breatheScale)
+            .background(PureBlack)
+            .graphicsLayer {
+                alpha = exitAlpha.value
             }
-
-            Spacer(modifier = Modifier.height(48.dp))
-
-            DotsLoader()
+    ) {
+        // 1. Centered Logo with Spring Jump + Heartbeat Pulse (no glow)
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .graphicsLayer {
+                    translationY = jumpOffsetY.value
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = painterResource(R.drawable.logo),
+                contentDescription = "Netmirror TV Logo",
+                modifier = Modifier
+                    .size(240.dp)
+                    .graphicsLayer {
+                        scaleX = heartbeatScale
+                        scaleY = heartbeatScale
+                        alpha = logoAlpha.value
+                    }
+            )
         }
 
-        if (uiState.error != null) {
-            AppToast(
-                title = "Internet Error",
-                message = "Download Updated app from netmirror.gg",
-                durationMs = 8000L,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 40.dp)
+        // 2. Bottom section: Fade-Arc Spinner OR Retry UI on Failure
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 56.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (uiState.error != null) {
+                SplashRetryCard(
+                    onRetry = { viewModel.retry() }
+                )
+            } else {
+                FadeArcSpinner(
+                    size = 52.dp,
+                    strokeWidth = 6.5.dp,
+                    sweepAngle = 260f
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Premium Fade-Arc Spinner matching reference design:
+ * - Thick, bold circular arc stroke.
+ * - Smooth continuous sweep gradient fading from completely invisible (0% alpha) to 100% solid color.
+ * - Solid rounded leading head dot seamlessly leading the arc.
+ * - Clean floating appearance on pitch black background (no distracting track ring).
+ * - Continuous 360-degree rotation.
+ */
+@Composable
+fun FadeArcSpinner(
+    modifier: Modifier = Modifier,
+    size: Dp = 52.dp,
+    strokeWidth: Dp = 6.5.dp,
+    sweepAngle: Float = 260f,
+    color: Color = NetmirrorRed
+) {
+    val transition = rememberInfiniteTransition(label = "fadeArcSpinnerTransition")
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "fadeArcRotation"
+    )
+
+    Canvas(modifier = modifier.size(size)) {
+        val strokePx = strokeWidth.toPx()
+        val radius = (this.size.minDimension - strokePx) / 2f
+        val diameter = radius * 2f
+        val center = Offset(this.size.width / 2f, this.size.height / 2f)
+        val arcSize = Size(diameter, diameter)
+        val arcTopLeft = Offset(center.x - radius, center.y - radius)
+
+        rotate(degrees = rotation, pivot = center) {
+            val sweepFraction = sweepAngle / 360f
+
+            // Smooth continuous gradient from 0% opacity to 100% solid color at the head
+            val sweepBrush = Brush.sweepGradient(
+                0.0f to Color.Transparent,
+                sweepFraction * 0.20f to color.copy(alpha = 0.05f),
+                sweepFraction * 0.45f to color.copy(alpha = 0.25f),
+                sweepFraction * 0.70f to color.copy(alpha = 0.60f),
+                sweepFraction * 0.90f to color.copy(alpha = 0.90f),
+                sweepFraction to color,
+                (sweepFraction + 0.001f).coerceAtMost(0.999f) to Color.Transparent,
+                1.0f to Color.Transparent,
+                center = center
+            )
+
+            // Draw the fade arc
+            drawArc(
+                brush = sweepBrush,
+                startAngle = 0f,
+                sweepAngle = sweepAngle,
+                useCenter = false,
+                style = Stroke(width = strokePx, cap = StrokeCap.Butt),
+                topLeft = arcTopLeft,
+                size = arcSize
+            )
+
+            // Solid rounded head dot at the leading tip of the fade arc
+            val headAngleRad = Math.toRadians(sweepAngle.toDouble())
+            val dotCenter = Offset(
+                x = center.x + radius * cos(headAngleRad).toFloat(),
+                y = center.y + radius * sin(headAngleRad).toFloat()
+            )
+
+            drawCircle(
+                color = color,
+                radius = strokePx / 2f,
+                center = dotCenter
             )
         }
     }
 }
 
 /**
- * Soft ambient glow behind the logo, pulsing in lockstep with the logo's
- * own breathing scale (same source value, so the two can never drift out
- * of sync). Gives the splash some depth instead of a flat logo-on-black —
- * this single touch is most of what separates a "real OTT app" splash
- * from a placeholder screen.
+ * TV D-Pad Remote Compatible Retry UI.
+ *
+ * Appears seamlessly if API/server calls encounter an error, auto-focuses the
+ * retry button so the user can simply press 'OK' on their remote to reconnect.
  */
 @Composable
-private fun GlowPulse(breatheScale: Float) {
-    val breatheT = (breatheScale - 1f) / 0.05f // 0f..1f across the breathing range
+private fun SplashRetryCard(
+    onRetry: () -> Unit
+) {
+    val retryFocusRequester = remember { FocusRequester() }
+    var isFocused by remember { mutableStateOf(false) }
 
-    Box(
-        modifier = Modifier
-            .size(300.dp)
-            .clip(CircleShape)
-            .background(GlowBrush)
-            .graphicsLayer {
-                scaleX = breatheScale
-                scaleY = breatheScale
-                alpha = 0.18f + 0.14f * breatheT
-            }
-    )
-}
-
-@Composable
-private fun BreathingLogo(breatheScale: Float) {
-    val entranceScale = remember { Animatable(0.85f) }
-    val entranceAlpha = remember { Animatable(0f) }
-
+    // Auto-focus on appearance for immediate TV remote response
     LaunchedEffect(Unit) {
-        launch {
-            entranceScale.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing)
-            )
-        }
-        launch {
-            entranceAlpha.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = 500, easing = LinearEasing)
-            )
-        }
+        delay(100)
+        runCatching { retryFocusRequester.requestFocus() }
     }
 
-    Image(
-        painter = painterResource(R.drawable.logo),
-        contentDescription = "Logo",
-        modifier = Modifier
-            .size(220.dp)
-            .graphicsLayer {
-                val combinedScale = entranceScale.value * breatheScale
-                scaleX = combinedScale
-                scaleY = combinedScale
-                alpha = entranceAlpha.value
-            }
+    val buttonScale by animateFloatAsState(
+        targetValue = if (isFocused) 1.08f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "retryScale"
     )
-}
 
-@Composable
-private fun DotsLoader(
-    dotCount: Int = 5,
-    dotSize: Dp = 10.dp,
-    spacing: Dp = 12.dp
-) {
-    val transition = rememberInfiniteTransition(label = "dotsLoader")
-    val cycleDuration = 1000
-    val stagger = cycleDuration / dotCount
-
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(spacing),
-        verticalAlignment = Alignment.CenterVertically
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        repeat(dotCount) { index ->
-            val t by transition.animateFloat(
-                initialValue = 0f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = keyframes {
-                        durationMillis = cycleDuration
-                        0f at 0
-                        1f at cycleDuration / 2
-                        0f at cycleDuration
-                    },
-                    repeatMode = RepeatMode.Restart,
-                    initialStartOffset = StartOffset(index * stagger)
-                ),
-                label = "dotPulse$index"
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.WifiOff,
+                contentDescription = "Connection Failed",
+                tint = Color(0xFFFF5252),
+                modifier = Modifier.size(16.dp)
             )
 
-            Box(
-                modifier = Modifier
-                    .size(dotSize)
-                    .graphicsLayer {
-                        val scale = 0.6f + 0.4f * t
-                        scaleX = scale
-                        scaleY = scale
-                        alpha = 0.35f + 0.65f * t
-                    }
-                    .clip(CircleShape)
-                    .background(Color.White)
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Text(
+                text = "Connection Failed",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
             )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Remote-control compatible Retry Button
+        Box(
+            modifier = Modifier
+                .focusRequester(retryFocusRequester)
+                .onFocusChanged { isFocused = it.isFocused }
+                .focusable()
+                .graphicsLayer {
+                    scaleX = buttonScale
+                    scaleY = buttonScale
+                }
+                .clip(RoundedCornerShape(20.dp))
+                .background(
+                    if (isFocused) NetmirrorRed else Color.White.copy(alpha = 0.12f)
+                )
+                .border(
+                    width = if (isFocused) 2.dp else 1.dp,
+                    color = if (isFocused) Color.White else Color.White.copy(alpha = 0.25f),
+                    shape = RoundedCornerShape(20.dp)
+                )
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onRetry
+                )
+                .onKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown) {
+                        if (keyEvent.key == Key.DirectionCenter ||
+                            keyEvent.key == Key.Enter ||
+                            keyEvent.key == Key.NumPadEnter
+                        ) {
+                            onRetry()
+                            return@onKeyEvent true
+                        }
+                    }
+                    false
+                }
+                .padding(horizontal = 22.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Refresh,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(15.dp)
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Text(
+                    text = "Retry",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.3.sp
+                )
+            }
         }
     }
 }

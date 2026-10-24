@@ -362,12 +362,15 @@ private fun PlayerContent(
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                30_000,
-                60_000,
-                1_000,
-                1_000
+                600_000,  // Minimum buffer: 10 minutes
+                600_000,  // Maximum buffer: 10 minutes
+                500,      // Initial playback buffer: 500 ms
+                500       // Rebuffer playback threshold: 500 ms
             )
-            .setBackBuffer(120_000, true)
+            .setBackBuffer(
+                120_000, // Back buffer: 2 minutes
+                true     // Retain back buffer from keyframes
+            )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -379,7 +382,7 @@ private fun PlayerContent(
         }
 
         val hlsMediaSourceFactory = HlsMediaSource.Factory(cacheDataSourceFactory)
-            .setAllowChunklessPreparation(false)
+            .setAllowChunklessPreparation(true)
             .setMetadataType(HlsMediaSource.METADATA_TYPE_ID3)
 
         val mediaItem = MediaItem.Builder()
@@ -393,7 +396,7 @@ private fun PlayerContent(
             .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
-            .setSeekParameters(SeekParameters.CLOSEST_SYNC)
+            .setSeekParameters(SeekParameters.EXACT)
             .build()
             .apply {
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
@@ -483,10 +486,12 @@ private fun PlayerContent(
     var seekHoldStartTime by remember { mutableLongStateOf(0L) }
     var lastSeekDirection by remember { mutableStateOf(0) } // -1 for Left, 1 for Right
     var seekEventTrigger by remember { mutableLongStateOf(0L) }
+    var lastSeekWasPreloaded by remember { mutableStateOf(false) }
 
     // Genuinely waiting for media spinner state:
-    // Only display spinner when playback is actively waiting for media data and has been waiting past a 450ms grace threshold.
-    // Instant seeks into preloaded/cached segments resolve before this threshold, avoiding spinner flashes completely.
+    // When seeking within preloaded buffer or backbuffer, decoding frames takes 200-500ms without needing network chunks.
+    // We suppress the spinner completely for preloaded seeks (using a 1500ms safety window) so it never flashes.
+    // When seeking into unbuffered network territory, the spinner appears after 450ms.
     val isWaitingForMedia = playerPlaybackState == Player.STATE_BUFFERING && playerPlayWhenReady
     val isInitialPreparing = (duration <= 0L || duration == C.TIME_UNSET) && playerPlaybackState != Player.STATE_ENDED
 
@@ -499,12 +504,14 @@ private fun PlayerContent(
             delay(200L)
             isBuffering = true
         } else if (isWaitingForMedia) {
-            delay(450L)
+            val graceDelay = if (lastSeekWasPreloaded) 1500L else 450L
+            delay(graceDelay)
             if (isWaitingForMedia && !isFastSeeking) {
                 isBuffering = true
             }
         } else {
             isBuffering = false
+            lastSeekWasPreloaded = false
         }
     }
 
@@ -523,8 +530,11 @@ private fun PlayerContent(
     // Debounce commit for rapid repeated seeks & IR remotes without KeyUp
     LaunchedEffect(fastSeekTargetPos, isFastSeeking) {
         if (isFastSeeking) {
-            delay(220L)
+            delay(120L)
             if (isFastSeeking) {
+                val isInsidePreload = (fastSeekTargetPos >= currentPosition && fastSeekTargetPos <= bufferedPosition) ||
+                                      (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
+                lastSeekWasPreloaded = isInsidePreload
                 exoPlayer.seekTo(fastSeekTargetPos)
                 currentPosition = fastSeekTargetPos
                 isFastSeeking = false
@@ -896,6 +906,9 @@ private fun PlayerContent(
                         }
                         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
                             if (isFastSeeking) {
+                                val isInsidePreload = (fastSeekTargetPos >= currentPosition && fastSeekTargetPos <= bufferedPosition) ||
+                                                      (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
+                                lastSeekWasPreloaded = isInsidePreload
                                 exoPlayer.seekTo(fastSeekTargetPos)
                                 currentPosition = fastSeekTargetPos
                                 isFastSeeking = false
@@ -991,6 +1004,9 @@ private fun PlayerContent(
                         val holdDuration = now - seekHoldStartTime
                         if (holdDuration >= 400L) {
                             // Sustained hold released: commit seek immediately
+                            val isInsidePreload = (fastSeekTargetPos >= currentPosition && fastSeekTargetPos <= bufferedPosition) ||
+                                                  (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
+                            lastSeekWasPreloaded = isInsidePreload
                             exoPlayer.seekTo(fastSeekTargetPos)
                             currentPosition = fastSeekTargetPos
                             isFastSeeking = false
@@ -1002,7 +1018,7 @@ private fun PlayerContent(
                             }
                             return@onPreviewKeyEvent true
                         } else {
-                            // Quick tap: let LaunchedEffect(fastSeekTargetPos, isFastSeeking) commit after 220ms
+                            // Quick tap: let LaunchedEffect(fastSeekTargetPos, isFastSeeking) commit after 120ms
                             seekEventTrigger = now
                             return@onPreviewKeyEvent true
                         }
