@@ -71,8 +71,26 @@ data class PlayerResponse(
     val t: String? = null,
 
     @SerializedName("error")
-    val error: String? = null
+    val error: String? = null,
+
+    @SerializedName(value = "server", alternate = ["active_server", "activeServer", "active"])
+    val server: String? = null,
+
+    @SerializedName(value = "servers", alternate = ["server_list", "serverList"])
+    val servers: List<ServerItem>? = null
 ) {
+    fun getEffectiveServers(fallbackServer: String = "S1"): List<ServerItem> {
+        val rawServers = servers ?: emptyList()
+        if (rawServers.isEmpty()) return emptyList()
+
+        val activeCode = server?.takeIf { it.isNotBlank() }
+            ?: rawServers.firstOrNull { it.active }?.headerCode
+            ?: fallbackServer
+
+        return rawServers.map { item ->
+            item.copy(active = item.headerCode.equals(activeCode, ignoreCase = true))
+        }
+    }
     val playUrl: String?
         get() = videoLink?.takeIf { it.isNotBlank() }
             ?: url?.takeIf { it.isNotBlank() }

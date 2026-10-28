@@ -124,6 +124,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import com.netmirror.netmirrortv.model.ServerItem
 import com.netmirror.netmirrortv.util.TokenStore
 import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.utils.PlaybackProgressStore
@@ -169,28 +170,6 @@ enum class MenuTab {
     AUDIO, SUBTITLE, RESOLUTION,SERVER, SPEED, SUBTITLE_SETTINGS
 }
 
-data class ServerItem(
-    val name: String,
-    val headerCode: String,
-    val active: Boolean = false
-)
-
-object TestingServers {
-    val servers = listOf(
-        ServerItem(name = "Server 1", headerCode = "S1", active = true),
-        ServerItem(name = "Server 2", headerCode = "S2", active = false),
-        ServerItem(name = "Server 3", headerCode = "S3", active = false),
-        ServerItem(name = "Server 4", headerCode = "S4", active = false),
-        ServerItem(name = "Server 5", headerCode = "S5", active = false)
-    )
-
-    fun getServers(activeCode: String = "S1"): List<ServerItem> {
-        return servers.map { server ->
-            server.copy(active = server.headerCode.equals(activeCode, ignoreCase = true))
-        }
-    }
-}
-
 enum class PlayerFocusArea {
     PLAY_PAUSE, MENU_TABS, MENU_CONTENT
 }
@@ -216,7 +195,7 @@ fun PlayerScreen(
     val onBackPressedDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
 
     LaunchedEffect(id) {
-        viewModel.loadStream(id)
+        viewModel.loadStream(id, server = "S1")
     }
 
     Box(
@@ -277,6 +256,7 @@ fun PlayerScreen(
                         mainId = mainId,
                         type = type,
                         activeServerCode = s.server,
+                        serverList = s.servers,
                         onServerSelected = { serverItem ->
                             viewModel.loadStream(id = id, server = serverItem.headerCode, force = true)
                         },
@@ -310,6 +290,7 @@ private fun PlayerContent(
     mainId: String = "",
     type: String = "",
     activeServerCode: String = "S1",
+    serverList: List<ServerItem> = emptyList(),
     onServerSelected: (ServerItem) -> Unit = {},
     onThirtySecondsPlayed: () -> Unit = {}
 ) {
@@ -579,6 +560,11 @@ private fun PlayerContent(
     }
 
     var currentActiveServer by remember(activeServerCode) { mutableStateOf(activeServerCode) }
+    val displayServers = remember(serverList, currentActiveServer) {
+        serverList.map { s ->
+            s.copy(active = s.headerCode.equals(currentActiveServer, ignoreCase = true))
+        }
+    }
 
 
     // Default Focus on Center Play/Pause button on launch
@@ -1565,20 +1551,24 @@ private fun PlayerContent(
                             )
                         }
 
-                        item {
-                            MenuTabPill(
-                                title = "Server",
-                                badge = TestingServers.getServers(currentActiveServer).firstOrNull { it.active }?.name ?: "Server 1",
-                                isSelected = activeMenuTab == MenuTab.SERVER,
-                                focusRequester = tabServerFocusRequester,
-                                onFocusGained = {
-                                    activeFocusArea = PlayerFocusArea.MENU_TABS
-                                    activeMenuTab = MenuTab.SERVER
-                                },
-                                onClick = {
-                                    activeMenuTab = MenuTab.SERVER
-                                }
-                            )
+                        if (displayServers.size > 1) {
+                            item {
+                                MenuTabPill(
+                                    title = "Server",
+                                    badge = displayServers.firstOrNull { it.active }?.name
+                                        ?: displayServers.firstOrNull { it.headerCode.equals(currentActiveServer, ignoreCase = true) }?.name
+                                        ?: "",
+                                    isSelected = activeMenuTab == MenuTab.SERVER,
+                                    focusRequester = tabServerFocusRequester,
+                                    onFocusGained = {
+                                        activeFocusArea = PlayerFocusArea.MENU_TABS
+                                        activeMenuTab = MenuTab.SERVER
+                                    },
+                                    onClick = {
+                                        activeMenuTab = MenuTab.SERVER
+                                    }
+                                )
+                            }
                         }
 
                         item {
@@ -1734,48 +1724,46 @@ private fun PlayerContent(
                             }
 
                             MenuTab.SERVER -> {
-                                val serverList = remember(currentActiveServer) {
-                                    TestingServers.getServers(currentActiveServer)
-                                }
-
-                                Column {
-                                    Text(
-                                        text = "Server",
-                                        color = Color.White,
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(bottom = 10.dp)
-                                    )
-                                    LazyRow(
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                        contentPadding = PaddingValues(
-                                            horizontal = 10.dp,
-                                            vertical = 6.dp
-                                        ),
-                                    ) {
-                                        itemsIndexed(serverList) { index, serverItem ->
-                                            OptionContentPill(
-                                                label = serverItem.name,
-                                                isSelected = serverItem.active,
-                                                focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
-                                                isFirst = index == 0,
-                                                isLast = index == serverList.size - 1,
-                                                onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
-                                                onClick = {
-                                                    if (currentActiveServer != serverItem.headerCode) {
-                                                        if (exoPlayer.currentPosition > 0L && exoPlayer.duration > 0L) {
-                                                            PlaybackProgressStore.saveProgress(
-                                                                context,
-                                                                id,
-                                                                exoPlayer.currentPosition / 1000L,
-                                                                exoPlayer.duration / 1000L
-                                                            )
+                                if (displayServers.size > 1) {
+                                    Column {
+                                        Text(
+                                            text = "Server",
+                                            color = Color.White,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(bottom = 10.dp)
+                                        )
+                                        LazyRow(
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            contentPadding = PaddingValues(
+                                                horizontal = 10.dp,
+                                                vertical = 6.dp
+                                            ),
+                                        ) {
+                                            itemsIndexed(displayServers) { index, serverItem ->
+                                                OptionContentPill(
+                                                    label = serverItem.name,
+                                                    isSelected = serverItem.active,
+                                                    focusRequester = if (index == 0) contentFirstOptionFocusRequester else null,
+                                                    isFirst = index == 0,
+                                                    isLast = index == displayServers.size - 1,
+                                                    onFocusGained = { activeFocusArea = PlayerFocusArea.MENU_CONTENT },
+                                                    onClick = {
+                                                        if (currentActiveServer != serverItem.headerCode) {
+                                                            if (exoPlayer.currentPosition > 0L && exoPlayer.duration > 0L) {
+                                                                PlaybackProgressStore.saveProgress(
+                                                                    context,
+                                                                    id,
+                                                                    exoPlayer.currentPosition / 1000L,
+                                                                    exoPlayer.duration / 1000L
+                                                                )
+                                                            }
+                                                            currentActiveServer = serverItem.headerCode
+                                                            onServerSelected(serverItem)
                                                         }
-                                                        currentActiveServer = serverItem.headerCode
-                                                        onServerSelected(serverItem)
                                                     }
-                                                }
-                                            )
+                                                )
+                                            }
                                         }
                                     }
                                 }

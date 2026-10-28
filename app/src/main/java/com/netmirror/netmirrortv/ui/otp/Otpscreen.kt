@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.Application
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,6 +15,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -51,6 +55,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
@@ -133,8 +138,8 @@ fun OtpScreen(
             .onPreviewKeyEvent { keyEvent ->
                 if (!showExitDialog && keyEvent.type == KeyEventType.KeyUp &&
                     (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
-                     keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER ||
-                     keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER ||
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
                 ) {
                     focusRequester.requestFocus()
                     keyboardController?.show()
@@ -149,7 +154,7 @@ fun OtpScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 32.dp, vertical = 20.dp),
+                .padding(start = 0.dp, top = 30.dp, end = 0.dp, bottom = 0.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -158,21 +163,12 @@ fun OtpScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 32.dp, vertical = 24.dp),
+                    .padding(horizontal = 0.dp, vertical = 0.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = "OTP VERIFICATION",
-                        color = Color(0xFFE50914),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 2.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
                         text = "Enter 6-Digit Code",
@@ -184,7 +180,7 @@ fun OtpScreen(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "Please enter the verification code sent to your device",
+                        text = "Please enter the valid OTP code.",
                         color = Color(0xFFA0A5B5),
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center
@@ -255,8 +251,8 @@ private fun OtpInputContainer(
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyUp &&
                     (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
-                     keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER ||
-                     keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER ||
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
                 ) {
                     onOpenKeyboard()
                     true
@@ -305,7 +301,7 @@ private fun OtpInputContainer(
 
                 Box(
                     modifier = Modifier
-                        .size(width = 48.dp, height = 56.dp)
+                        .size(width = 56.dp, height = 64.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(backgroundColor)
                         .border(
@@ -318,7 +314,7 @@ private fun OtpInputContainer(
                     Text(
                         text = char,
                         color = Color.White,
-                        fontSize = 22.sp,
+                        fontSize = 25.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -326,7 +322,7 @@ private fun OtpInputContainer(
         }
     }
 
-    Spacer(modifier = Modifier.height(14.dp))
+    Spacer(modifier = Modifier.height(20.dp))
 
     // TV Remote Action Button (Focusable button so DPAD users can click to open keyboard)
     Box(
@@ -342,8 +338,8 @@ private fun OtpInputContainer(
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyUp &&
                     (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
-                     keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER ||
-                     keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER ||
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
                 ) {
                     onOpenKeyboard()
                     true
@@ -418,46 +414,99 @@ private fun StatusSection(uiState: OtpUiState) {
 @Composable
 private fun PublisherMessage(response: OtpResponse?) {
     val pubMsg = response?.pub_msg
-    val imgUrl = response?.pub_msg_img?.img
+    val pubImg = response?.pub_msg_img
+    val imgUrl = pubImg?.img
     if (pubMsg.isNullOrEmpty() && imgUrl.isNullOrEmpty()) return
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF101116))
-            .border(1.dp, Color(0xFF2A2E3B), RoundedCornerShape(14.dp))
-            .padding(14.dp),
+    // API se aaya width / height fraction (f) mein: 0.8 -> 80%
+    val widthFraction = percentToFraction(pubImg?.maxw)                    // null => poori width
+    val heightFraction = percentToFraction(pubImg?.maxh ?: pubImg?.maxh2)  // null => purana 150.dp max
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val hasImage = !imgUrl.isNullOrEmpty()
+
+    val cardPadding = 14.dp
+
+    // Bahar wala layer sirf available width naapta hai; card ka size image se decide hota hai
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        // Image width = (available width - card padding) ka fraction
+        val imageWidth = (maxWidth - cardPadding * 2).coerceAtLeast(0.dp) * (widthFraction ?: 1f)
+        // Image height = screen height ka fraction (screen se bahar na jaye)
+        val imageHeight = heightFraction?.let { (screenHeight * it).coerceAtMost(screenHeight) }
+
+        // Card (column ka container) image ke saath resize hota hai:
+        //  - width  = image width + padding (text bhi isi width mein wrap hota hai)
+        //  - height = text + image height + padding (wrap content)
+        val cardWidth = if (hasImage) {
+            (imageWidth + cardPadding * 2)
+                .coerceAtLeast(minOf(maxWidth, 180.dp))
+                .coerceAtMost(maxWidth)
+        } else {
+            maxWidth
+        }
+
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF101116))
+                .border(1.dp, Color(0xFF2A2E3B), RoundedCornerShape(14.dp))
+                .animateContentSize(animationSpec = tween(250)) // API size badalne par smooth resize
+                .width(cardWidth)
+                .wrapContentHeight()
+                .padding(cardPadding),
+            contentAlignment = Alignment.Center
         ) {
-            if (!pubMsg.isNullOrEmpty()) {
-                Text(
-                    text = pubMsg,
-                    color = runCatching {
-                        Color(android.graphics.Color.parseColor(response?.pub_msg_color))
-                    }.getOrDefault(Color.White),
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center
-                )
-            }
-            if (!imgUrl.isNullOrEmpty()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
                 if (!pubMsg.isNullOrEmpty()) {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = pubMsg,
+                        color = runCatching {
+                            Color(android.graphics.Color.parseColor(response?.pub_msg_color))
+                        }.getOrDefault(Color.White),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
                 }
-                AsyncImage(
-                    model = imgUrl,
-                    contentDescription = "Publisher Announcement Image",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 150.dp),
-                    contentScale = ContentScale.Fit
-                )
+                if (hasImage) {
+                    if (!pubMsg.isNullOrEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+                    AsyncImage(
+                        model = imgUrl,
+                        contentDescription = "Publisher Announcement Image",
+                        modifier = Modifier
+                            .width(imageWidth)
+                            .then(
+                                if (imageHeight != null) Modifier.height(imageHeight)
+                                else Modifier.heightIn(max = 150.dp)
+                            ),
+                        contentScale = ContentScale.Fit
+                    )
+                }
             }
         }
     }
+}
+
+/**
+ * API ki fraction value (f) jaise 0.8 = 80% ko 0..1 range mein deta hai.
+ * - null / 0 / negative => null (default behaviour)
+ * - 0 < v <= 1          => seedha fraction (0.8f)
+ * - 1 < v <= 100        => percent maan kar /100 (80 -> 0.8f), safety ke liye
+ * - 100 se bada         => 1f (full)
+ */
+private fun percentToFraction(value: Float?): Float? {
+    if (value == null || value <= 0f) return null
+    val fraction = when {
+        value <= 1f -> value
+        value <= 100f -> value / 100f
+        else -> 1f
+    }
+    return fraction.coerceIn(0.05f, 1f)
 }

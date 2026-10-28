@@ -104,9 +104,9 @@ data class NavDrawerItem(
 val appNavDrawerItems =
     listOf(
         NavDrawerItem("Home", Icons.Default.Home),
+        NavDrawerItem("Search", Icons.Default.Search),
         NavDrawerItem("TV Shows", Icons.Default.Tv),
         NavDrawerItem("Movies", Icons.Default.Movie),
-        NavDrawerItem("Search", Icons.Default.Search),
         NavDrawerItem("OTT", Icons.Default.Apps),
     )
 

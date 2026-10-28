@@ -103,7 +103,7 @@ private val CardFocusedContainerColor = Color(0xFF303030)
 private val CardContainerColor = Color(0xFF202020)
 
 internal const val LandscapeFullCardsCount = 5
-internal const val PortraitFullCardsCount = 6
+internal const val PortraitFullCardsCount = 5
 internal const val CardPeekFraction = 0.05f // 25% of the next card is "little visible" (peeking)
 internal val RowStartPadding = 7.dp
 internal val RowEndPadding = 24.dp
@@ -128,7 +128,7 @@ internal fun calculateCardWidthForScreen(screenWidth: Dp, isPortrait: Boolean = 
     return calculateCardWidth(availableWidth, isPortrait)
 }
 
-internal val PortraitCardWidth = 150.dp
+internal val PortraitCardWidth = 200.dp
 internal val LandscapeCardWidth = 200.dp
 internal const val PortraitAspectRatio = 2f / 3f
 internal const val LandscapeAspectRatio = 16f / 9f
@@ -425,7 +425,8 @@ private fun HomeMediaCard(
 
     // Restore focus to this card if it was the last focused card when navigating back from DetailsScreen
     LaunchedEffect(id, rowPosition, focusRequester) {
-        if (TvFocusManager.lastFocusedHomeCardId == id &&
+        if (!TvFocusManager.isUpdateDialogOpen &&
+            TvFocusManager.lastFocusedHomeCardId == id &&
             (TvFocusManager.lastFocusedHomeRowPosition == null || TvFocusManager.lastFocusedHomeRowPosition == rowPosition)
         ) {
             TvFocusManager.lastFocusedContentRequester = focusRequester
@@ -440,7 +441,8 @@ private fun HomeMediaCard(
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME, lifecycleOwner) {
-        if (TvFocusManager.lastFocusedHomeCardId == id &&
+        if (!TvFocusManager.isUpdateDialogOpen &&
+            TvFocusManager.lastFocusedHomeCardId == id &&
             (TvFocusManager.lastFocusedHomeRowPosition == null || TvFocusManager.lastFocusedHomeRowPosition == rowPosition)
         ) {
             TvFocusManager.lastFocusedContentRequester = focusRequester

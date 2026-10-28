@@ -3,6 +3,7 @@ package com.netmirror.netmirrortv.utils
 import androidx.compose.ui.focus.FocusRequester
 
 object TvFocusManager {
+    var isUpdateDialogOpen: Boolean = false
     var carousel: FocusRequester = FocusRequester()
     var selectedDrawerRequester: FocusRequester? = null
     var drawerRequesters: List<FocusRequester> = emptyList()
@@ -29,11 +30,11 @@ object TvFocusManager {
     var focusVisibleContent: (() -> Boolean)? = null
 
     fun hasSavedHomeContentFocus(): Boolean {
-        return isCarouselLastFocused || lastFocusedHomeCardId != null || rowFocusRequesters.isNotEmpty() || focusVisibleContent != null
+        return isUpdateDialogOpen || isCarouselLastFocused || lastFocusedHomeCardId != null || rowFocusRequesters.isNotEmpty() || focusVisibleContent != null
     }
 
     fun hasSavedContentFocus(): Boolean {
-        return hasSavedHomeContentFocus() || lastFocusedSearchCardId != null
+        return isUpdateDialogOpen || hasSavedHomeContentFocus() || lastFocusedSearchCardId != null
     }
 
     /**
@@ -41,6 +42,7 @@ object TvFocusManager {
      * Returns true if successful, false otherwise.
      */
     fun requestFocus(requester: FocusRequester?): Boolean {
+        if (isUpdateDialogOpen) return false
         if (requester == null) return false
         return runCatching { requester.requestFocus() }.isSuccess
     }
@@ -50,6 +52,7 @@ object TvFocusManager {
      * Tries lastFocusedContentRequester first, then visible content, then first row, then active row requesters, then screen defaults.
      */
     fun moveFocusToContent(): Boolean {
+        if (isUpdateDialogOpen) return false
         if (isCarouselLastFocused && requestFocus(carousel)) return true
         if (lastFocusedHomeCardId != null && requestFocus(lastFocusedContentRequester)) return true
         if (requestFocus(lastFocusedContentRequester)) return true
@@ -69,6 +72,7 @@ object TvFocusManager {
      * Attempts to move focus from Content area into Navigation Drawer.
      */
     fun moveFocusToDrawer(): Boolean {
+        if (isUpdateDialogOpen) return false
         if (requestFocus(selectedDrawerRequester)) return true
         drawerRequesters.forEach { req ->
             if (requestFocus(req)) return true
@@ -80,6 +84,7 @@ object TvFocusManager {
      * Attempts to move focus specifically to the Account button in the Navigation Drawer.
      */
     fun restoreAccountFocus(): Boolean {
+        if (isUpdateDialogOpen) return false
         return requestFocus(accountDrawerRequester)
     }
 
@@ -87,6 +92,7 @@ object TvFocusManager {
      * Directly focuses on the Home Carousel and marks it as the active focused item.
      */
     fun focusCarouselDirectly(): Boolean {
+        if (isUpdateDialogOpen) return false
         isCarouselLastFocused = true
         lastFocusedContentRequester = carousel
         lastFocusedHomeCardId = null

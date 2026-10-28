@@ -137,7 +137,7 @@ interface ApiService {
         userAgent: String =
             Constants.DEFAULT_USER_AGENT,
 
-    ): TitleDetailsResponse
+        ): TitleDetailsResponse
 
 
     @GET("episodes.php")
@@ -168,7 +168,7 @@ interface ApiService {
         @Header("Ott")
         ott: String,
 
-        @Header("server")
+        @Query("s")
         server: String = "S1",
 
         @Header("Usertoken")

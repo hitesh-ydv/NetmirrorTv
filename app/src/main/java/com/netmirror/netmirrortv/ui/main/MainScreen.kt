@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -109,6 +110,10 @@ fun MainScreen(
 
     var updateDialogData by remember { mutableStateOf<UpdateMessageResponse?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showUpdateDialog) {
+        TvFocusManager.isUpdateDialogOpen = showUpdateDialog
+    }
 
     suspend fun checkUpdate() {
         if (AppSession.hasShownUpdateDialog) return
@@ -190,7 +195,7 @@ fun MainScreen(
             }
 
             // TV Shows
-            1 -> {
+            2 -> {
                 if (homeViewModel.page.value != "show") {
                     homeViewModel.loadHome("show")
                     TvFocusManager.lastFocusedContentRequester = null
@@ -211,7 +216,7 @@ fun MainScreen(
             }
 
             // Movies
-            2 -> {
+            3 -> {
                 if (homeViewModel.page.value != "movie") {
                     homeViewModel.loadHome("movie")
                     TvFocusManager.lastFocusedContentRequester = null
@@ -232,7 +237,7 @@ fun MainScreen(
             }
 
             // Search
-            3 -> {
+            1 -> {
                 TvFocusManager.lastFocusedSearchCardId = null
                 if (currentRoute != Routes.SEARCH) {
                     navController.navigate(Routes.SEARCH) {
@@ -261,35 +266,45 @@ fun MainScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        AppModalNavigationDrawer(
-            selectedIndex = selectedIndex,
-            onItemSelected = onSelectTab,
-            onAccountClick = {
-                showAccountDialog = true
-            },
-            isAccountDialogOpen = showAccountDialog
+        // While the update dialog is open, NOTHING behind it can take focus.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (showUpdateDialog) Modifier.focusProperties { canFocus = false }
+                    else Modifier
+                )
         ) {
-            NavHost(
-                navController = navController,
-                startDestination = Routes.HOME
+            AppModalNavigationDrawer(
+                selectedIndex = selectedIndex,
+                onItemSelected = onSelectTab,
+                onAccountClick = {
+                    showAccountDialog = true
+                },
+                isAccountDialogOpen = showAccountDialog
             ) {
-                composable(Routes.HOME) {
-                    HomeScreen(
-                        viewModel = homeViewModel,
-                        appNavController = appNavController,
-                    )
-                }
+                NavHost(
+                    navController = navController,
+                    startDestination = Routes.HOME
+                ) {
+                    composable(Routes.HOME) {
+                        HomeScreen(
+                            viewModel = homeViewModel,
+                            appNavController = appNavController,
+                        )
+                    }
 
-                composable(Routes.SEARCH) {
-                    SearchScreen(appNavController = appNavController)
-                }
+                    composable(Routes.SEARCH) {
+                        SearchScreen(appNavController = appNavController)
+                    }
 
-                composable(Routes.OTT) {
-                    OttScreen(
-                        onNavigateToHome = {
-                            onSelectTab(0)
-                        }
-                    )
+                    composable(Routes.OTT) {
+                        OttScreen(
+                            onNavigateToHome = {
+                                onSelectTab(0)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -347,6 +362,7 @@ fun MainScreen(
                     onDismiss = {
                         AppSession.hasShownUpdateDialog = true
                         showUpdateDialog = false
+                        TvFocusManager.isUpdateDialogOpen = false
                         coroutineScope.launch {
                             repeat(12) { attempt ->
                                 val success = TvFocusManager.focusCarouselDirectly()

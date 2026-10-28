@@ -4,7 +4,7 @@ import kotlin.collections.listOf
 
 object Constants {
 
-    const val APP_VERSION = "2.1"
+    const val APP_VERSION = "2.0"
 
     val DEFAULT_USER_AGENT: String = run {
         val deviceAgent = System.getProperty("http.agent").orEmpty().trim()

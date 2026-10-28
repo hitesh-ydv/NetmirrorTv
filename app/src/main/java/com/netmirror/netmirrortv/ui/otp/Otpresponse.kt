@@ -13,7 +13,8 @@ data class OtpResponse(
 
 data class PubMsgImg(
     val img: String? = null,
-    val maxw: Int? = null,
-    val maxh: Int? = null,
-    val maxh2: Int? = null
+    // API se fraction (f) aata hai: 0.8 = 80%
+    val maxw: Float? = null,
+    val maxh: Float? = null,
+    val maxh2: Float? = null
 )

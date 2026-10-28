@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import android.util.Log
 import com.netmirror.netmirrortv.datastore.AppPreferences
 import com.netmirror.netmirrortv.model.PlayerResponse
+import com.netmirror.netmirrortv.model.ServerItem
 import com.netmirror.netmirrortv.network.ApiClient
 import com.netmirror.netmirrortv.util.TokenStore
 import com.netmirror.netmirrortv.utils.AppSession
@@ -17,7 +18,11 @@ import kotlinx.coroutines.launch
 
 sealed class PlayerUiState {
     object Loading : PlayerUiState()
-    data class Success(val response: PlayerResponse, val server: String = "S1") : PlayerUiState()
+    data class Success(
+        val response: PlayerResponse,
+        val server: String = "S1",
+        val servers: List<ServerItem> = response.getEffectiveServers(server)
+    ) : PlayerUiState()
     data class Error(val message: String) : PlayerUiState()
 }
 
@@ -61,7 +66,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 val streamUrl = response.playUrl
                 if (!streamUrl.isNullOrBlank()) {
                     loadedId = id
-                    _uiState.value = PlayerUiState.Success(response, server = server)
+                    val activeServer = response.server?.takeIf { it.isNotBlank() }
+                        ?: response.servers?.firstOrNull { it.active }?.headerCode
+                        ?: server
+                    currentServer = activeServer
+                    val serverList = response.getEffectiveServers(activeServer)
+                    _uiState.value = PlayerUiState.Success(
+                        response = response,
+                        server = activeServer,
+                        servers = serverList
+                    )
                 } else if (!response.error.isNullOrBlank()) {
                     _uiState.value = PlayerUiState.Error(response.error)
                 } else {

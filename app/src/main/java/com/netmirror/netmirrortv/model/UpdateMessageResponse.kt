@@ -7,7 +7,25 @@ data class UpdateMessageResponse(
     val img: UpdateImageInfo? = null,
 
     @SerializedName("btn_ok")
-    val btnOk: String? = null
+    val btnOk: String? = null,
+
+    @SerializedName("apk_url")
+    val apkUrl: String? = null,
+
+    @SerializedName("apk_link")
+    val apkLink: String? = null,
+
+    @SerializedName("apk")
+    val apk: String? = null,
+
+    @SerializedName("download_url")
+    val downloadUrl: String? = null,
+
+    @SerializedName("url")
+    val url: String? = null,
+
+    @SerializedName("link")
+    val link: String? = null
 )
 
 data class UpdateImageInfo(
@@ -15,11 +33,11 @@ data class UpdateImageInfo(
     val url: String? = null,
 
     @SerializedName("maxh")
-    val maxh: Int? = null,
+    val maxh: Any? = null,
 
     @SerializedName("maxw")
-    val maxw: Int? = null,
+    val maxw: Any? = null,
 
     @SerializedName("maxh2")
-    val maxh2: Int? = null
+    val maxh2: Any? = null
 )
