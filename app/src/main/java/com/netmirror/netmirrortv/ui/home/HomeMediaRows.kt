@@ -31,6 +31,10 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -94,6 +98,9 @@ import androidx.navigation.NavHostController
 import com.netmirror.netmirrortv.navigation.Routes
 import com.netmirror.netmirrortv.utils.PlaybackProgressStore
 import kotlinx.coroutines.delay
+
+private const val RestoreWindowMs = 2500L
+private const val RestoreStepMs = 100L
 
 private val RowCardShape = RoundedCornerShape(5)
 private val PosterPlaceholder = Regex("-{3,}")
@@ -227,6 +234,45 @@ internal fun HomeMediaRow(
     val rowState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
+    // ---- Focus restore after coming back from DetailsScreen (one effect per ROW, not per card) ----
+    // Bumped on every ON_RESUME so the restore also runs when returning to an already-composed Home.
+    var restoreTick by remember { mutableIntStateOf(0) }
+    // Set when the user presses a key themselves -> stop forcing focus back.
+    var userMoved by remember { mutableStateOf(false) }
+    val onUserKey = remember { { userMoved = true } }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME, LocalLifecycleOwner.current) { restoreTick++ }
+
+    LaunchedEffect(ids, cardFocusRequesters, rowPosition, restoreTick) {
+        if (TvFocusManager.isUpdateDialogOpen) return@LaunchedEffect
+        val targetId = TvFocusManager.lastFocusedHomeCardId ?: return@LaunchedEffect
+        val lastRow = TvFocusManager.lastFocusedHomeRowPosition
+        if (lastRow != null && lastRow != rowPosition) return@LaunchedEffect
+        val targetIndex = ids.indexOf(targetId)
+        val requester = cardFocusRequesters.getOrNull(targetIndex) ?: return@LaunchedEffect
+
+        userMoved = false
+        TvFocusManager.lastFocusedContentRequester = requester
+        withFrameNanos { }
+        // The target card must be composed to take focus: bring it into the LazyRow only if needed.
+        if (rowState.layoutInfo.totalItemsCount > 0 &&
+            rowState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }
+        ) {
+            rowState.scrollToItem(targetIndex)
+        }
+        // Sticky: the player/window may clear focus AFTER our first successful request, so keep
+        // re-requesting (a no-op while focused) for ~2.5s, until the user presses a key or focus
+        // moves to a different card (which changes lastFocusedHomeCardId).
+        var elapsed = 0L
+        while (elapsed < RestoreWindowMs && !userMoved &&
+            TvFocusManager.lastFocusedHomeCardId == targetId
+        ) {
+            runCatching { requester.requestFocus() }
+            delay(RestoreStepMs)
+            elapsed += RestoreStepMs
+            withFrameNanos { }
+        }
+    }
+
     if (rowPosition == 0) {
         DisposableEffect(cardFocusRequesters, rowState) {
             TvFocusManager.focusFirstRow = {
@@ -264,12 +310,11 @@ internal fun HomeMediaRow(
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
     val fallbackAvailableWidth = screenWidth - 100.dp
 
+    // CardDefaults.border/colors are @Composable (they cache internally), so they must not be
+    // called inside remember { }.
     val cardBorder = CardDefaults.border(
         focusedBorder = Border(
-            border = BorderStroke(
-                width = 3.dp,
-                color = CardBorderColor
-            ),
+            border = BorderStroke(width = 3.dp, color = CardBorderColor),
             shape = RowCardShape
         )
     )
@@ -363,7 +408,7 @@ internal fun HomeMediaRow(
                         }
                         HomeMediaCard(
                             id = id,
-                            imageUrl = resolveCardImageUrl(imageTemplate, id),
+                            imageUrl = remember(imageTemplate, id) { resolveCardImageUrl(imageTemplate, id) },
                             imgReferer = imgReferer,
                             isPortrait = isPortraitRow,
                             isTop10 = isTop10Row,
@@ -384,6 +429,7 @@ internal fun HomeMediaRow(
                             focusRequester = cardFocusRequesters[index],
                             nextCardFocusRequester = if (index + 1 < cardFocusRequesters.size) cardFocusRequesters[index + 1] else null,
                             onFocused = onFocused,
+                            onUserKey = onUserKey,
                             onDelete = handleDeleteCard,
                             appNavController = appNavController
                         )
@@ -418,43 +464,11 @@ private fun HomeMediaCard(
     focusRequester: FocusRequester,
     nextCardFocusRequester: FocusRequester? = null,
     onFocused: () -> Unit,
+    onUserKey: () -> Unit = {},
     onDelete: (() -> Unit)? = null,
     appNavController: NavHostController,
 ) {
     val context = LocalContext.current
-
-    // Restore focus to this card if it was the last focused card when navigating back from DetailsScreen
-    LaunchedEffect(id, rowPosition, focusRequester) {
-        if (!TvFocusManager.isUpdateDialogOpen &&
-            TvFocusManager.lastFocusedHomeCardId == id &&
-            (TvFocusManager.lastFocusedHomeRowPosition == null || TvFocusManager.lastFocusedHomeRowPosition == rowPosition)
-        ) {
-            TvFocusManager.lastFocusedContentRequester = focusRequester
-            repeat(8) { attempt ->
-                val focused = runCatching { focusRequester.requestFocus() }.getOrDefault(false)
-                if (focused) return@LaunchedEffect
-                delay(40L * (attempt + 1))
-            }
-        }
-    }
-
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    val coroutineScope = rememberCoroutineScope()
-    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME, lifecycleOwner) {
-        if (!TvFocusManager.isUpdateDialogOpen &&
-            TvFocusManager.lastFocusedHomeCardId == id &&
-            (TvFocusManager.lastFocusedHomeRowPosition == null || TvFocusManager.lastFocusedHomeRowPosition == rowPosition)
-        ) {
-            TvFocusManager.lastFocusedContentRequester = focusRequester
-            coroutineScope.launch {
-                repeat(10) { attempt ->
-                    val focused = runCatching { focusRequester.requestFocus() }.getOrDefault(false)
-                    if (focused) return@launch
-                    delay(30L * (attempt + 1))
-                }
-            }
-        }
-    }
 
     val deleteFocusRequester = remember { FocusRequester() }
     var isDeleteFocused by remember { mutableStateOf(false) }
@@ -509,6 +523,7 @@ private fun HomeMediaCard(
                     }
                 }
                 .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) onUserKey()
                     // Consume stray KeyUp events for Center / Enter if card gained focus very recently
                     if (event.type == KeyEventType.KeyUp &&
                         (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) &&
@@ -657,21 +672,21 @@ private fun HomeMediaCard(
                     .onPreviewKeyEvent { event ->
                         when {
                             event.type == KeyEventType.KeyDown &&
-                                (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
                                 true
                             }
                             event.type == KeyEventType.KeyUp &&
-                                (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
+                                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
                                 onDelete?.invoke()
                                 true
                             }
                             event.type == KeyEventType.KeyDown &&
-                                (event.key == Key.DirectionLeft || event.key == Key.Back) -> {
+                                    (event.key == Key.DirectionLeft || event.key == Key.Back) -> {
                                 focusRequester.requestFocus()
                                 true
                             }
                             event.type == KeyEventType.KeyDown &&
-                                event.key == Key.DirectionRight -> {
+                                    event.key == Key.DirectionRight -> {
                                 if (nextCardFocusRequester != null) {
                                     nextCardFocusRequester.requestFocus()
                                     true
@@ -680,7 +695,7 @@ private fun HomeMediaCard(
                                 }
                             }
                             event.type == KeyEventType.KeyDown &&
-                                event.key == Key.DirectionDown -> {
+                                    event.key == Key.DirectionDown -> {
                                 focusRequester.requestFocus()
                                 true
                             }

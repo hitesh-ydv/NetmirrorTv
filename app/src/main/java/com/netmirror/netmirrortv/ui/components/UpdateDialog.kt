@@ -169,6 +169,8 @@ fun UpdateDialog(
 
     var downloadState by remember { mutableStateOf<UpdateDownloadState>(UpdateDownloadState.Idle) }
     var showExitDialog by remember { mutableStateOf(false) }
+    // Message shown in ReadyToInstall when the installer could not be opened
+    var installHint by remember { mutableStateOf<String?>(null) }
 
     // Start download action
     val startDownload: () -> Unit = {
@@ -177,6 +179,7 @@ fun UpdateDialog(
             android.util.Log.e("UpdateDialog", "apkDownloadUrl is blank! updateData=$updateData")
             downloadState = UpdateDownloadState.Error("Update link unavailable. Please try again later.")
         } else {
+            installHint = null
             downloadState = UpdateDownloadState.Downloading(percent = 0, downloadedBytes = 0L, totalBytes = 0L)
             coroutineScope.launch {
                 ApkUpdateInstaller.downloadAndInstall(
@@ -191,7 +194,8 @@ fun UpdateDialog(
                     },
                     onError = { message ->
                         downloadState = UpdateDownloadState.Error(message)
-                    }
+                    },
+                    onInstallHint = { hint -> installHint = hint }
                 )
             }
         }
@@ -553,17 +557,20 @@ fun UpdateDialog(
                                     verticalArrangement = Arrangement.Center
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        CircularProgressIndicator(
-                                            color = Color(0xFFE50914),
-                                            strokeWidth = 3.dp,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
+                                        if (installHint == null) {
+                                            CircularProgressIndicator(
+                                                color = Color(0xFFE50914),
+                                                strokeWidth = 3.dp,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                        }
                                         Text(
-                                            text = "Ready to install! Confirm on screen prompt...",
+                                            text = installHint ?: "Ready to install! Confirm on screen prompt...",
                                             color = Color.White,
                                             fontSize = 14.sp,
-                                            fontWeight = FontWeight.SemiBold
+                                            fontWeight = FontWeight.SemiBold,
+                                            textAlign = TextAlign.Center
                                         )
                                     }
 
@@ -580,7 +587,7 @@ fun UpdateDialog(
                                         },
                                         onClick = {
                                             val apkFile = File(File(context.cacheDir, "updates"), "NetmirrorTV_update.apk")
-                                            ApkUpdateInstaller.installApk(context, apkFile)
+                                            installHint = ApkUpdateInstaller.installApk(context, apkFile)
                                         }
                                     )
                                 }

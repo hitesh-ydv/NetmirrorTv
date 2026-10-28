@@ -85,7 +85,9 @@ import com.yourapp.data.model.TitleDetailsResponse
 import com.yourapp.data.model.Episode
 import com.yourapp.data.model.Season
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private val AccentGreen = Color(0xFF46D369)
 private val FocusGlow = Color(0x66FFFFFF) // semi‑transparent white glow
@@ -274,15 +276,8 @@ private fun DetailsContent(
     val playFocusRequester = remember { FocusRequester() }
     val addFocusRequester = remember { FocusRequester() }
 
-    TvFocusManager.currentScreenContentRequester = playFocusRequester
-
-    DisposableEffect(Unit) {
-        onDispose {
-            if (TvFocusManager.currentScreenContentRequester == playFocusRequester) {
-                TvFocusManager.currentScreenContentRequester = null
-            }
-        }
-    }
+    // The declarations of pendingEpisodeRestoreIndex/episodeRestoreTarget are further below,
+    // so the registration is done after them (see `contentRequester`).
 
     val ott = com.netmirror.netmirrortv.utils.AppSession.currentOtt().ifBlank { data.ott.orEmpty() }
     val videoId = if (data.type == "t") "SE_${data.main_id}" else data.main_id
@@ -305,6 +300,27 @@ private fun DetailsContent(
     var pageBringIntoViewSpec by remember { mutableStateOf<BringIntoViewSpec>(NoOpBringIntoViewSpec) }
     // Prevents the initial focus request from triggering a scroll animation — only real user focus navigation should scroll.
     var hasInitializedFocus by remember { mutableStateOf(false) }
+    // Index of the episode the user opened the player from. rememberSaveable survives the
+    // trip to the player screen (the details composition is disposed meanwhile), so on
+    // return we can focus that episode instead of the Play button. -1 = nothing to restore.
+    var pendingEpisodeRestoreIndex by rememberSaveable(data.main_id) { mutableIntStateOf(-1) }
+    // Requester of the episode row to restore; used by the outer focusRestorer / TvFocusManager
+    // so that no one else (Play button) grabs focus while a restore is pending.
+    var episodeRestoreTarget by remember { mutableStateOf<FocusRequester?>(null) }
+
+    val contentRequester =
+        if (pendingEpisodeRestoreIndex >= 0) episodeRestoreTarget ?: playFocusRequester else playFocusRequester
+    TvFocusManager.currentScreenContentRequester = contentRequester
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (TvFocusManager.currentScreenContentRequester == contentRequester ||
+                TvFocusManager.currentScreenContentRequester == playFocusRequester
+            ) {
+                TvFocusManager.currentScreenContentRequester = null
+            }
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenHeight = maxHeight
@@ -329,7 +345,10 @@ private fun DetailsContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .focusGroup()
-                    .focusRestorer { playFocusRequester }
+                    .focusRestorer {
+                        if (pendingEpisodeRestoreIndex >= 0) episodeRestoreTarget ?: playFocusRequester
+                        else playFocusRequester
+                    }
                     .verticalScroll(scrollState)
             ) {
 
@@ -548,7 +567,18 @@ private fun DetailsContent(
                     onLoadMoreEpisodes = onLoadMoreEpisodes,
                     defaultBringIntoViewSpec = defaultBringIntoViewSpec,
                     minHeight = screenHeight,
-                    onEpisodeClick = onEpisodeClick,
+                    onEpisodeClick = { index, episode ->
+                        pendingEpisodeRestoreIndex = index
+                        onEpisodeClick(episode)
+                    },
+                    pendingEpisodeRestoreIndex = pendingEpisodeRestoreIndex,
+                    onEpisodeRestored = { success ->
+                        if (pendingEpisodeRestoreIndex >= 0) {
+                            pendingEpisodeRestoreIndex = -1
+                            if (!success) requestFocusSafely(playFocusRequester)
+                        }
+                    },
+                    onRestoreTarget = { episodeRestoreTarget = it },
                     onSuggestionClick = onSuggestionClick,
                     onTabsFocused = {
                         if (hasInitializedFocus) {
@@ -582,8 +612,20 @@ private fun DetailsContent(
     } // end BoxWithConstraints
 
     LaunchedEffect(Unit) {
-        delay(150)
-        TvFocusManager.requestFocus(playFocusRequester)
+        if (pendingEpisodeRestoreIndex >= 0) {
+            // Returning from the player: EpisodesTabContent focuses the episode and resets
+            // the index to -1. If that never happens (e.g. episodes failed to load), fall back to Play.
+            val restored = withTimeoutOrNull(5000) {
+                snapshotFlow { pendingEpisodeRestoreIndex }.first { it < 0 }
+            } != null
+            if (!restored) {
+                pendingEpisodeRestoreIndex = -1
+                requestFocusSafely(playFocusRequester)
+            }
+        } else {
+            delay(150)
+            TvFocusManager.requestFocus(playFocusRequester)
+        }
         hasInitializedFocus = true
     }
 }
@@ -671,6 +713,11 @@ private fun LanguageChip(
         )
     }
 }
+
+// Direct requestFocus first (no dependency on TvFocusManager internals), then the manager as fallback.
+private fun requestFocusSafely(requester: FocusRequester): Boolean =
+    runCatching { requester.requestFocus() }.getOrDefault(false) ||
+            runCatching { TvFocusManager.requestFocus(requester) }.getOrDefault(false)
 
 private fun parseDurationToSeconds(durationStr: String?): Long {
     if (durationStr.isNullOrBlank()) return 0L
@@ -914,7 +961,10 @@ private fun DetailsTabsSection(
     onLoadMoreEpisodes: () -> Unit,
     defaultBringIntoViewSpec: BringIntoViewSpec,
     minHeight: androidx.compose.ui.unit.Dp = 0.dp,
-    onEpisodeClick: (Episode) -> Unit = {},
+    onEpisodeClick: (Int, Episode) -> Unit = { _, _ -> },
+    pendingEpisodeRestoreIndex: Int = -1,
+    onEpisodeRestored: (Boolean) -> Unit = {},
+    onRestoreTarget: (FocusRequester) -> Unit = {},
     onSuggestionClick: (String) -> Unit = {},
     onTabsFocused: () -> Unit = {},
     onEpisodesFocusChanged: (Boolean) -> Unit = {},
@@ -984,6 +1034,9 @@ private fun DetailsTabsSection(
                 onLoadMore = onLoadMoreEpisodes,
                 defaultBringIntoViewSpec = defaultBringIntoViewSpec,
                 onEpisodeClick = onEpisodeClick,
+                pendingEpisodeRestoreIndex = pendingEpisodeRestoreIndex,
+                onEpisodeRestored = onEpisodeRestored,
+                onRestoreTarget = onRestoreTarget,
                 onEpisodesFocusChanged = onEpisodesFocusChanged
             )
             DetailsTab.MORE_LIKE_THIS -> MoreLikeThisTabContent(
@@ -1088,7 +1141,10 @@ private fun EpisodesTabContent(
     onSeasonSelected: (String) -> Unit,
     onLoadMore: () -> Unit,
     defaultBringIntoViewSpec: BringIntoViewSpec,
-    onEpisodeClick: (Episode) -> Unit = {},
+    onEpisodeClick: (Int, Episode) -> Unit = { _, _ -> },
+    pendingEpisodeRestoreIndex: Int = -1,
+    onEpisodeRestored: (Boolean) -> Unit = {},
+    onRestoreTarget: (FocusRequester) -> Unit = {},
     onEpisodesFocusChanged: (Boolean) -> Unit = {}
 ) {
     val seasons = data.season.orEmpty()
@@ -1130,6 +1186,26 @@ private fun EpisodesTabContent(
         episodeFocusRequesters.getOrNull(targetIndex)
             ?: episodeFocusRequesters.firstOrNull()
             ?: FocusRequester.Default
+    }
+
+    // Restore focus to the episode the user came back from (player -> details).
+    // The restore is "sticky" for ~2.5s: the player screen / window can clear focus AFTER our
+    // first successful request (while it is being disposed), so we keep re-requesting until
+    // the window ends or the user moves focus somewhere else themselves.
+    var restoreConfirmed by remember { mutableStateOf(false) }
+    LaunchedEffect(pendingEpisodeRestoreIndex, episodesState.episodes, episodesState.isLoadingSeason) {
+        if (pendingEpisodeRestoreIndex < 0) return@LaunchedEffect
+        if (episodesState.isLoadingSeason || episodesState.episodes.isEmpty()) return@LaunchedEffect
+        val index = pendingEpisodeRestoreIndex.coerceIn(0, episodesState.episodes.lastIndex)
+        val req = episodeFocusRequesters.getOrNull(index) ?: return@LaunchedEffect
+        lastFocusedEpisodeIndex = index
+        onRestoreTarget(req)
+        repeat(25) {
+            withFrameNanos { }
+            requestFocusSafely(req)   // no-op if already focused
+            delay(100)
+        }
+        onEpisodeRestored(restoreConfirmed)
     }
 
     LaunchedEffect(episodesState.episodes, episodesState.isLoadingSeason, episodesState.isLoadingMore) {
@@ -1216,7 +1292,7 @@ private fun EpisodesTabContent(
                         .fillMaxWidth()
                         .onFocusChanged { onEpisodesFocusChanged(it.hasFocus) },
 //                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     episodesState.episodes.forEachIndexed { index, episode ->
                         val isFirst = index == 0
@@ -1233,8 +1309,16 @@ private fun EpisodesTabContent(
                             downFocusRequester = if (episodesState.hasMore) loadMoreFocusRequester else FocusRequester.Cancel,
                             onFocused = {
                                 lastFocusedEpisodeIndex = index
+                                if (pendingEpisodeRestoreIndex >= 0) {
+                                    if (index == pendingEpisodeRestoreIndex.coerceIn(0, episodesState.episodes.lastIndex)) {
+                                        restoreConfirmed = true
+                                    } else {
+                                        // user navigated elsewhere on their own -> stop forcing focus
+                                        onEpisodeRestored(true)
+                                    }
+                                }
                             },
-                            onClick = { onEpisodeClick(episode) }
+                            onClick = { onEpisodeClick(index, episode) }
                         )
                     }
 

@@ -40,6 +40,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -94,14 +100,26 @@ fun HomeCarousel(
     val configuration = LocalConfiguration.current
 
     // Compute target size for background images (use screen dimensions as limit)
-    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }.toInt()
-    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }.toInt()
+    val screenWidthPx = remember(density, configuration.screenWidthDp) {
+        with(density) { configuration.screenWidthDp.dp.toPx() }.toInt()
+    }
+    val screenHeightPx = remember(density, configuration.screenHeightDp) {
+        with(density) { configuration.screenHeightDp.dp.toPx() }.toInt()
+    }
     // For logos, we can use a smaller size (e.g., max width 800px, height 400px)
     val logoWidthPx = 800
     val logoHeightPx = 400
 
     var isCarouselFocused by remember { mutableStateOf(false) }
     var wrapTransitionKey by remember { mutableIntStateOf(0) }
+    // Survives the trip to DetailsScreen so the carousel reopens on the same slide.
+    var savedActiveIndex by rememberSaveable { mutableIntStateOf(0) }
+    // Bumped on every ON_RESUME (e.g. coming back from details/player) to re-run the focus restore.
+    var restoreTick by remember { mutableIntStateOf(0) }
+    // Set when the user presses a key themselves -> stop forcing focus back to the carousel.
+    var userMoved by remember { mutableStateOf(false) }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME, LocalLifecycleOwner.current) { restoreTick++ }
 
     AnimatedContent(
         targetState = wrapTransitionKey,
@@ -111,29 +129,28 @@ fun HomeCarousel(
         },
         label = "carouselWrapTransition",
     ) { transitionKey ->
-        val carouselState = rememberCarouselState(initialActiveItemIndex = 0)
+        val carouselState = rememberCarouselState(
+            initialActiveItemIndex = if (transitionKey > 0) 0 else savedActiveIndex.coerceIn(0, slider.lastIndex)
+        )
 
-        LaunchedEffect(transitionKey) {
-            if (transitionKey > 0 || TvFocusManager.isCarouselLastFocused) {
-                repeat(8) { attempt ->
-                    val focused = TvFocusManager.requestFocus(TvFocusManager.carousel)
-                    if (focused) return@LaunchedEffect
-                    delay(40L * (attempt + 1))
-                }
-            }
+        LaunchedEffect(carouselState) {
+            snapshotFlow { carouselState.activeItemIndex }.collect { savedActiveIndex = it }
         }
 
-        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-        val coroutineScope = rememberCoroutineScope()
-        androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME, lifecycleOwner) {
-            if (TvFocusManager.isCarouselLastFocused) {
-                coroutineScope.launch {
-                    repeat(10) { attempt ->
-                        val focused = TvFocusManager.requestFocus(TvFocusManager.carousel)
-                        if (focused) return@launch
-                        delay(30L * (attempt + 1))
-                    }
-                }
+        // Sticky focus restore. A single request is not enough: when returning from another screen the
+        // window / previous destination can clear focus AFTER our first successful request. So keep
+        // (cheaply) re-requesting for ~2.5s, until the user presses a key or leaves the carousel.
+        LaunchedEffect(transitionKey, restoreTick) {
+            if (transitionKey == 0 && !TvFocusManager.isCarouselLastFocused) return@LaunchedEffect
+            userMoved = false
+            var elapsed = 0L
+            while (elapsed < RestoreWindowMs && !userMoved &&
+                (transitionKey > 0 || TvFocusManager.isCarouselLastFocused)
+            ) {
+                withFrameNanos { }
+                TvFocusManager.requestFocus(TvFocusManager.carousel)   // no-op when already focused
+                delay(RestoreStepMs)
+                elapsed += RestoreStepMs
             }
         }
 
@@ -158,24 +175,19 @@ fun HomeCarousel(
                     .onFocusChanged {
                         isCarouselFocused = it.isFocused || it.hasFocus
                         if (it.isFocused || it.hasFocus) {
-                            TvFocusManager.lastFocusedContentRequester = TvFocusManager.carousel
-                            TvFocusManager.isCarouselLastFocused = true
-                            TvFocusManager.lastFocusedHomeCardId = null
-                            TvFocusManager.lastFocusedHomeRowPosition = null
-                            TvFocusManager.lastFocusedSearchCardId = null
+                            markCarouselFocused()
                         }
                     }
                     .onPreviewKeyEvent { event ->
+                        val isWrapRight = event.key == Key.DirectionRight &&
+                                carouselState.activeItemIndex == slider.lastIndex
+                        if (event.type == KeyEventType.KeyDown && !isWrapRight) userMoved = true
                         when {
                             event.type == KeyEventType.KeyDown &&
                                     (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) -> {
                                 val activeItem = slider.getOrNull(carouselState.activeItemIndex)
                                 if (activeItem != null) {
-                                    TvFocusManager.lastFocusedContentRequester = TvFocusManager.carousel
-                                    TvFocusManager.isCarouselLastFocused = true
-                                    TvFocusManager.lastFocusedHomeCardId = null
-                                    TvFocusManager.lastFocusedHomeRowPosition = null
-                                    TvFocusManager.lastFocusedSearchCardId = null
+                                    markCarouselFocused()
                                     appNavController.navigate(Routes.details(activeItem.id))
                                 }
                                 true
@@ -300,6 +312,17 @@ fun HomeCarousel(
             }
         }
     }
+}
+
+private const val RestoreWindowMs = 2500L
+private const val RestoreStepMs = 100L
+
+private fun markCarouselFocused() {
+    TvFocusManager.lastFocusedContentRequester = TvFocusManager.carousel
+    TvFocusManager.isCarouselLastFocused = true
+    TvFocusManager.lastFocusedHomeCardId = null
+    TvFocusManager.lastFocusedHomeRowPosition = null
+    TvFocusManager.lastFocusedSearchCardId = null
 }
 
 @Composable

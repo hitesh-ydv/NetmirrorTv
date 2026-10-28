@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -41,12 +42,13 @@ object ApkUpdateInstaller {
         context: Context,
         apkUrl: String,
         onProgress: (percent: Int, downloadedBytes: Long, totalBytes: Long) -> Unit,
-        onError: (message: String) -> Unit
+        onError: (message: String) -> Unit,
+        onInstallHint: (message: String) -> Unit = {}
     ) = withContext(Dispatchers.IO) {
         try {
             val trimmedUrl = apkUrl.trim()
             if (trimmedUrl.isEmpty() || !trimmedUrl.startsWith("http", ignoreCase = true)) {
-                onError("Invalid update download link.")
+                withContext(Dispatchers.Main) { onError("Invalid update download link.") }
                 return@withContext
             }
 
@@ -64,13 +66,16 @@ object ApkUpdateInstaller {
 
             val response = httpClient.newCall(request).execute()
             if (!response.isSuccessful) {
-                onError("Download failed: Server returned HTTP ${response.code}")
+                val code = response.code
+                response.close() // don't leak the connection
+                withContext(Dispatchers.Main) { onError("Download failed: Server returned HTTP $code") }
                 return@withContext
             }
 
             val body = response.body
             if (body == null) {
-                onError("Download failed: Empty response body.")
+                response.close()
+                withContext(Dispatchers.Main) { onError("Download failed: Empty response body.") }
                 return@withContext
             }
 
@@ -119,9 +124,11 @@ object ApkUpdateInstaller {
 
             withContext(Dispatchers.Main) {
                 onProgress(100, downloadedBytes, totalBytes)
-                installApk(context, apkFile)
+                installApk(context, apkFile)?.let(onInstallHint)
             }
 
+        } catch (e: CancellationException) {
+            throw e // scope cancelled (dialog left composition) - not a download error
         } catch (e: Exception) {
             Log.e(TAG, "APK download error: ${e.message}", e)
             withContext(Dispatchers.Main) {
@@ -132,24 +139,30 @@ object ApkUpdateInstaller {
 
     /**
      * Triggers the Android Package Installer for the downloaded APK file.
+     * Returns null when the installer was launched, otherwise a short message for the user.
      */
-    fun installApk(context: Context, apkFile: File) {
-        try {
+    fun installApk(context: Context, apkFile: File): String? {
+        return try {
             if (!apkFile.exists() || apkFile.length() <= 0) {
                 Log.e(TAG, "APK file does not exist or is empty.")
-                return
+                return "Downloaded file is missing. Please retry the download."
             }
 
             // Check Unknown Sources permission on Android 8.0+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (!context.packageManager.canRequestPackageInstalls()) {
-                    Log.i(TAG, "Requesting unknown sources permission.")
-                    val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !context.packageManager.canRequestPackageInstalls()
+            ) {
+                Log.i(TAG, "Requesting unknown sources permission.")
+                val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                return try {
                     context.startActivity(settingsIntent)
-                    return
+                    "Allow \"Install unknown apps\" for this app, come back and press OPEN INSTALLER."
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unknown sources settings not available: ${e.message}", e)
+                    "Enable \"Install unknown apps\" for NetMirror TV in your TV settings, then press OPEN INSTALLER."
                 }
             }
 
@@ -166,8 +179,10 @@ object ApkUpdateInstaller {
             }
 
             context.startActivity(installIntent)
+            null
         } catch (e: Exception) {
             Log.e(TAG, "Error installing APK: ${e.message}", e)
+            "Couldn't open the installer: ${e.localizedMessage ?: "unknown error"}"
         }
     }
 }
