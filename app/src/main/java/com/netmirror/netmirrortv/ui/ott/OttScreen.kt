@@ -142,7 +142,7 @@ fun OttScreen(
             AppToast(
                 title = "Network Error",
                 message = "OTT Page Loading Fail, Retry after some times.",
-                durationMs = 10000L,
+                durationMs = 60000L,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 40.dp)

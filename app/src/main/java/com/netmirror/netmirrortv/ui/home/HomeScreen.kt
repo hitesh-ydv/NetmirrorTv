@@ -47,6 +47,7 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
+import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.utils.TvFocusManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -261,7 +262,7 @@ fun HomeScreen(
                                         if (!referer.isNullOrBlank()) {
                                             setHeader("Referer", referer)
                                         }
-                                        setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                        setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                                     }
                                     .allowRgb565(true)
                                     .build()

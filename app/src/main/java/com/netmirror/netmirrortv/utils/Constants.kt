@@ -5,6 +5,7 @@ import kotlin.collections.listOf
 object Constants {
 
     const val APP_VERSION = "2.0"
+    const val X_REQUESTED_WITH = "NetmirrorNewTV v1.0"
 
     val DEFAULT_USER_AGENT: String = run {
         val deviceAgent = System.getProperty("http.agent").orEmpty().trim()

@@ -88,6 +88,12 @@ class DetailsViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun seedEpisodesFromDetails(data: TitleDetailsResponse) {
+        // Only seed if episodes haven't been loaded yet for this content.
+        // This prevents resetting already-loaded (paginated) episodes when
+        // navigating back from the player screen.
+        val current = _episodesState.value
+        if (current.episodes.isNotEmpty() || current.isLoadingSeason) return
+
         val selectedSeason = data.season.orEmpty().firstOrNull { it.selected == true }
             ?: data.season.orEmpty().firstOrNull()
 

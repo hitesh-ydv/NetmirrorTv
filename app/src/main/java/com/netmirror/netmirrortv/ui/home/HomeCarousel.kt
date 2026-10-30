@@ -76,6 +76,7 @@ import androidx.tv.material3.rememberCarouselState
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Size
+import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.utils.TvFocusManager
 
 import androidx.navigation.NavHostController
@@ -236,7 +237,7 @@ fun HomeCarousel(
                                     if (!imgReferer.isNullOrBlank()) {
                                         setHeader("Referer", imgReferer)
                                     }
-                                    setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                    setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                                 }
                                 .crossfade(true)
                                 .build()
@@ -288,7 +289,7 @@ fun HomeCarousel(
                                         if (!imgReferer.isNullOrBlank()) {
                                             setHeader("Referer", imgReferer)
                                         }
-                                        setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                        setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                                     }
                                     .crossfade(true)
                                     .build()

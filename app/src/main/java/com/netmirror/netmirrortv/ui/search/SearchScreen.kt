@@ -71,6 +71,7 @@ import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
 import com.netmirror.netmirrortv.model.SearchItem
+import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.utils.TvFocusManager
 import com.netmirror.netmirrortv.datastore.AppPreferences
 import com.netmirror.netmirrortv.ui.home.CardSpacing
@@ -344,7 +345,7 @@ fun SearchScreen(
             AppToast(
                 title = "Network Error",
                 message = "Search Page Loading Fail, Retry after some times.",
-                durationMs = 10000L,
+                durationMs = 60000L,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 40.dp)
@@ -519,7 +520,7 @@ private fun SearchResultCard(
                                 if (!imgReferer.isNullOrBlank()) {
                                     setHeader("Referer", imgReferer)
                                 }
-                                setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                             }
                             .crossfade(false)
                             .build()

@@ -182,7 +182,7 @@ fun SplashScreen(
                 painter = painterResource(R.drawable.logo),
                 contentDescription = "Netmirror TV Logo",
                 modifier = Modifier
-                    .size(240.dp)
+                    .size(120.dp)
                     .graphicsLayer {
                         scaleX = heartbeatScale
                         scaleY = heartbeatScale

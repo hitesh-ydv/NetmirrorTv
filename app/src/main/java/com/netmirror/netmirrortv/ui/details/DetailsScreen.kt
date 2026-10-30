@@ -76,6 +76,7 @@ import com.netmirror.netmirrortv.ui.home.calculateCardWidth
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.navigation.Routes
 import com.netmirror.netmirrortv.utils.PlaybackProgressStore
 import com.netmirror.netmirrortv.utils.ProgressInfo
@@ -370,7 +371,7 @@ private fun DetailsContent(
                                     if (!referer.isNullOrBlank()) {
                                         setHeader("Referer", referer)
                                     }
-                                    setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                    setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                                 }
                                 .crossfade(true)
                                 .build()
@@ -451,7 +452,7 @@ private fun DetailsContent(
                                             if (!referer.isNullOrBlank()) {
                                                 setHeader("Referer", referer)
                                             }
-                                            setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                            setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                                         }
                                         .crossfade(true)
                                         .build()
@@ -459,7 +460,7 @@ private fun DetailsContent(
                                 contentDescription = data.ott,
                                 modifier = Modifier
                                     .widthIn(max = 120.dp)
-                                    .heightIn(max = 60.dp)
+                                    .heightIn(max = 180.dp)
                                     .padding(bottom = 19.dp)
                                 ,
                                 contentScale = ContentScale.Fit
@@ -1618,7 +1619,7 @@ private fun EpisodeRow(
                             if (!imgReferer.isNullOrBlank()) {
                                 setHeader("Referer", imgReferer)
                             }
-                            setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                            setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                         }
                         .crossfade(true)
                         .build()
@@ -1877,7 +1878,7 @@ private fun MoreLikeThisCard(
                         if (!imgReferer.isNullOrBlank()) {
                             setHeader("Referer", imgReferer)
                         }
-                        setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                        setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                     }
                     .crossfade(true)
                     .build()

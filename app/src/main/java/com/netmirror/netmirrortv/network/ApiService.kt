@@ -31,24 +31,24 @@ interface ApiService {
     @Headers(
         "Cache-Control: no-cache, no-store, must-revalidate",
         "Pragma: no-cache",
-        "Expires: 0",
-        "X-Requested-With: NetmirrorNewTV v1.0"
+        "Expires: 0"
     )
     @GET("otp.php")
     suspend fun checkOtp(
         @Header("Otp") otp: String,
+        @Header("X-Requested-With") request: String = Constants.X_REQUESTED_WITH,
         @Header("User-Agent") userAgent: String = Constants.DEFAULT_USER_AGENT
     ): Response<OtpResponse>
 
     @Headers(
         "Cache-Control: no-cache, no-store, must-revalidate",
         "Pragma: no-cache",
-        "Expires: 0",
-        "X-Requested-With: NetmirrorNewTV v1.0"
+        "Expires: 0"
     )
     @GET("ott.php")
     suspend fun getOtts(
         @Header("Usertoken") userToken: String = "",
+        @Header("X-Requested-With") request: String = Constants.X_REQUESTED_WITH,
         @Header("User-Agent") userAgent: String = Constants.DEFAULT_USER_AGENT
     ): Response<OttResponse>
 
@@ -56,7 +56,7 @@ interface ApiService {
     suspend fun getNavbar(
         @Header("Ott") ott: String,
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -85,7 +85,7 @@ interface ApiService {
         userToken: String = "",
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -102,7 +102,7 @@ interface ApiService {
         userToken: String = "",
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -131,7 +131,7 @@ interface ApiService {
         userToken: String = "",
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -152,7 +152,7 @@ interface ApiService {
         ott: String,
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -175,7 +175,7 @@ interface ApiService {
         userToken: String = "",
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -194,7 +194,7 @@ interface ApiService {
         videoId: String,
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -213,7 +213,7 @@ interface ApiService {
         deleteId: String,
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -232,7 +232,7 @@ interface ApiService {
         videoId: String,
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -251,7 +251,7 @@ interface ApiService {
         deleteId: String,
 
         @Header("X-Requested-With")
-        request: String = "NetmirrorNewTV v1.0",
+        request: String = Constants.X_REQUESTED_WITH,
 
         @Header("User-Agent")
         userAgent: String =
@@ -261,11 +261,11 @@ interface ApiService {
     @Headers(
         "Cache-Control: no-cache, no-store, must-revalidate",
         "Pragma: no-cache",
-        "Expires: 0",
-        "X-Requested-With: NetmirrorNewTV v1.0"
+        "Expires: 0"
     )
     @GET("update-msg.php")
     suspend fun getUpdateMessage(
+        @Header("X-Requested-With") request: String = Constants.X_REQUESTED_WITH,
         @Header("User-Agent") userAgent: String = Constants.DEFAULT_USER_AGENT
     ): Response<UpdateMessageResponse>
 }

@@ -108,12 +108,14 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -125,6 +127,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.netmirror.netmirrortv.model.ServerItem
+import com.netmirror.netmirrortv.ui.components.AppToast
 import com.netmirror.netmirrortv.util.TokenStore
 import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.utils.PlaybackProgressStore
@@ -194,8 +197,46 @@ fun PlayerScreen(
     val context = LocalContext.current
     val onBackPressedDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
 
+    var errorToast by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var exoPlayerError by remember { mutableStateOf<String?>(null) }
+    var showExoRetry by remember { mutableStateOf(false) }
+    val exoRetryFocusRequester = remember { FocusRequester() }
+
     LaunchedEffect(id) {
         viewModel.loadStream(id, server = "S1")
+    }
+
+    LaunchedEffect(showExoRetry) {
+        if (showExoRetry) {
+            delay(100)
+            runCatching { exoRetryFocusRequester.requestFocus() }
+        }
+    }
+
+    LaunchedEffect(exoPlayerError) {
+        if (exoPlayerError != null) {
+            delay(5_000L)
+//            errorToast = null
+            showExoRetry = true
+        }
+    }
+
+    LaunchedEffect(uiState) {
+        when (val s = uiState) {
+            is PlayerUiState.Loading -> {
+                showExoRetry = false
+                exoPlayerError = null
+            }
+            is PlayerUiState.Error -> {
+                errorToast = "API Error" to "Player Page Error : ${s.message}"
+            }
+            is PlayerUiState.Success -> {
+                if (s.response.playUrl.isNullOrBlank()) {
+                    val msg = s.response.error?.takeIf { it.isNotBlank() } ?: "No stream available."
+                    errorToast = "API Error" to msg
+                }
+            }
+        }
     }
 
     Box(
@@ -218,14 +259,17 @@ fun PlayerScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = s.message,
+                        text = "Player Page Error : ${s.message}",
                         color = Color.White,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Spacer(Modifier.height(16.dp))
                     Button(
-                        onClick = { viewModel.loadStream(id, force = true) },
+                        onClick = {
+                            errorToast = null
+                            viewModel.loadStream(id, force = true)
+                        },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color.White,
                             contentColor = Color.Black
@@ -258,10 +302,18 @@ fun PlayerScreen(
                         activeServerCode = s.server,
                         serverList = s.servers,
                         onServerSelected = { serverItem ->
+                            errorToast = null
+                            exoPlayerError = null
+                            showExoRetry = false
                             viewModel.loadStream(id = id, server = serverItem.headerCode, force = true)
                         },
                         onThirtySecondsPlayed = {
                             viewModel.logRecentPlay(id = id, mainId = mainId, type = type)
+                        },
+                        onError = { errorTitle, errorMessage ->
+                            exoPlayerError = errorMessage
+                            showExoRetry = false
+                            errorToast = errorTitle to errorMessage
                         }
                     )
                 } else {
@@ -274,6 +326,87 @@ fun PlayerScreen(
                 }
             }
         }
+
+        if (showExoRetry) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.88f))
+                    .zIndex(20f)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
+                            if (onBackPressedDispatcher != null) {
+                                onBackPressedDispatcher.onBackPressed()
+                            } else {
+                                (context as? ComponentActivity)?.onBackPressedDispatcher?.onBackPressed()
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Playback Error",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (!exoPlayerError.isNullOrBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = exoPlayerError.orEmpty(),
+                            color = Color(0xFFA0A5B5),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Normal,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.widthIn(max = 500.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(22.dp))
+                    Button(
+                        onClick = {
+                            showExoRetry = false
+                            exoPlayerError = null
+                            errorToast = null
+                            viewModel.loadStream(id, force = true)
+                        },
+                        modifier = Modifier.focusRequester(exoRetryFocusRequester),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Retry", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        errorToast?.let { (toastTitle, toastMessage) ->
+            AppToast(
+                title = toastTitle,
+                message = toastMessage,
+                durationMs = 60_000L,
+                visible = true,
+                onDismiss = {
+                    errorToast = null
+                    if (exoPlayerError != null) {
+                        showExoRetry = true
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 36.dp)
+                    .zIndex(10f)
+            )
+        }
     }
 }
 
@@ -285,14 +418,15 @@ private fun PlayerContent(
     mainTitle: String = "",
     ep: String = "",
     epTitle: String = "",
-    referer: String = "https://net52.cc",
+    referer: String = "",
     id: String = "",
     mainId: String = "",
     type: String = "",
     activeServerCode: String = "S1",
     serverList: List<ServerItem> = emptyList(),
     onServerSelected: (ServerItem) -> Unit = {},
-    onThirtySecondsPlayed: () -> Unit = {}
+    onThirtySecondsPlayed: () -> Unit = {},
+    onError: (title: String, message: String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val onBackPressedDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
@@ -331,7 +465,7 @@ private fun PlayerContent(
                 buildMap {
                     put("Referer", referer)
                     put("User-Agent", Constants.DEFAULT_USER_AGENT)
-                    put("X-Requested-With", "NetmirrorNewTV v1.0")
+                    put("X-Requested-With", Constants.X_REQUESTED_WITH)
                 }
             )
         }
@@ -514,7 +648,7 @@ private fun PlayerContent(
             delay(120L)
             if (isFastSeeking) {
                 val isInsidePreload = (fastSeekTargetPos >= currentPosition && fastSeekTargetPos <= bufferedPosition) ||
-                                      (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
+                        (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
                 lastSeekWasPreloaded = isInsidePreload
                 exoPlayer.seekTo(fastSeekTargetPos)
                 currentPosition = fastSeekTargetPos
@@ -780,6 +914,35 @@ private fun PlayerContent(
                     metaLoaded = true
                 }
             }
+
+            override fun onPlayerError(error: PlaybackException) {
+                var httpCode: Int? = null
+                var cause: Throwable? = error
+                while (cause != null) {
+                    if (cause is HttpDataSource.InvalidResponseCodeException) {
+                        httpCode = cause.responseCode
+                        break
+                    }
+                    cause = cause.cause
+                }
+
+                val errorMsg = error.message?.takeIf { it.isNotBlank() }
+                    ?: error.cause?.message?.takeIf { it.isNotBlank() }
+
+                val formattedMessage = buildString {
+                    append("Code: ${error.errorCode}")
+                    if (httpCode != null) {
+                        append(" (HTTP $httpCode)")
+                    }
+                    append(" - ${error.errorCodeName}")
+                    if (!errorMsg.isNullOrBlank() && errorMsg != error.errorCodeName) {
+                        append(": $errorMsg")
+                    }
+                }
+
+                Log.e("PlayerScreen", "ExoPlayer Error: $formattedMessage", error)
+                onError("Playback Error", formattedMessage)
+            }
         }
         exoPlayer.addListener(listener)
 
@@ -893,7 +1056,7 @@ private fun PlayerContent(
                         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
                             if (isFastSeeking) {
                                 val isInsidePreload = (fastSeekTargetPos >= currentPosition && fastSeekTargetPos <= bufferedPosition) ||
-                                                      (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
+                                        (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
                                 lastSeekWasPreloaded = isInsidePreload
                                 exoPlayer.seekTo(fastSeekTargetPos)
                                 currentPosition = fastSeekTargetPos
@@ -984,14 +1147,14 @@ private fun PlayerContent(
                     }
                 } else if (event.type == KeyEventType.KeyUp) {
                     if ((event.key == Key.DirectionLeft || event.key == Key.DirectionRight ||
-                         event.key == Key.MediaRewind || event.key == Key.MediaFastForward ||
-                         event.key == Key.MediaStepBackward || event.key == Key.MediaStepForward) && isFastSeeking) {
+                                event.key == Key.MediaRewind || event.key == Key.MediaFastForward ||
+                                event.key == Key.MediaStepBackward || event.key == Key.MediaStepForward) && isFastSeeking) {
                         val now = System.currentTimeMillis()
                         val holdDuration = now - seekHoldStartTime
                         if (holdDuration >= 400L) {
                             // Sustained hold released: commit seek immediately
                             val isInsidePreload = (fastSeekTargetPos >= currentPosition && fastSeekTargetPos <= bufferedPosition) ||
-                                                  (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
+                                    (fastSeekTargetPos < currentPosition && (currentPosition - fastSeekTargetPos) <= 120_000L)
                             lastSeekWasPreloaded = isInsidePreload
                             exoPlayer.seekTo(fastSeekTargetPos)
                             currentPosition = fastSeekTargetPos
@@ -2155,22 +2318,22 @@ private fun applyInitialPreferences(
     if (audioCandidates.isNotEmpty()) {
         val targetAudio = audioCandidates.firstOrNull { candidate ->
             savedAudio != null && (
-                candidate.label.equals(savedAudio, ignoreCase = true) ||
-                candidate.langCode.equals(savedAudio, ignoreCase = true) ||
-                candidate.displayLang.equals(savedAudio, ignoreCase = true)
-            )
+                    candidate.label.equals(savedAudio, ignoreCase = true) ||
+                            candidate.langCode.equals(savedAudio, ignoreCase = true) ||
+                            candidate.displayLang.equals(savedAudio, ignoreCase = true)
+                    )
         }
             ?: audioCandidates.firstOrNull { candidate ->
                 candidate.label.contains("Hindi", ignoreCase = true) ||
-                candidate.langCode.equals("hi", ignoreCase = true) ||
-                candidate.langCode.equals("hin", ignoreCase = true) ||
-                candidate.displayLang.equals("Hindi", ignoreCase = true)
+                        candidate.langCode.equals("hi", ignoreCase = true) ||
+                        candidate.langCode.equals("hin", ignoreCase = true) ||
+                        candidate.displayLang.equals("Hindi", ignoreCase = true)
             }
             ?: audioCandidates.firstOrNull { candidate ->
                 candidate.label.contains("English", ignoreCase = true) ||
-                candidate.langCode.equals("en", ignoreCase = true) ||
-                candidate.langCode.equals("eng", ignoreCase = true) ||
-                candidate.displayLang.equals("English", ignoreCase = true)
+                        candidate.langCode.equals("en", ignoreCase = true) ||
+                        candidate.langCode.equals("eng", ignoreCase = true) ||
+                        candidate.displayLang.equals("English", ignoreCase = true)
             }
             ?: audioCandidates.firstOrNull()
 
@@ -2205,8 +2368,8 @@ private fun applyInitialPreferences(
         }
         val targetSub = textCandidates.firstOrNull { candidate ->
             candidate.label.equals(savedSubtitle, ignoreCase = true) ||
-            candidate.langCode.equals(savedSubtitle, ignoreCase = true) ||
-            candidate.displayLang.equals(savedSubtitle, ignoreCase = true)
+                    candidate.langCode.equals(savedSubtitle, ignoreCase = true) ||
+                    candidate.displayLang.equals(savedSubtitle, ignoreCase = true)
         }
         if (targetSub != null) {
             val newParams = exoPlayer.trackSelectionParameters.buildUpon()
@@ -2918,4 +3081,3 @@ private fun SubtitleSmallOptionPill(
         onClick = onClick
     )
 }
-

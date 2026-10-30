@@ -313,7 +313,7 @@ fun MainScreen(
             AppToast(
                 title = "Network Error",
                 message = "Main Page Loading Fail, Retry after some times.",
-                durationMs = 10000L,
+                durationMs = 60000L,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 40.dp)

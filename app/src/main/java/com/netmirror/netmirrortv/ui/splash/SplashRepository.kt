@@ -3,6 +3,7 @@ package com.netmirror.netmirrortv.ui.splash
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import androidx.compose.ui.unit.Constraints
 import com.netmirror.netmirrortv.datastore.AppPreferences
 import com.netmirror.netmirrortv.network.ApiClient
 import com.netmirror.netmirrortv.network.BaseUrlProvider
@@ -26,12 +27,13 @@ class SplashRepository (
 
                 val serverUrl = decode(encoded)
 
-                val endpoint = decode("L2NoZWNrdHYtdmVyLnBocA==") // /checktv-ver.php
+                val endpoint = decode("L2NoZWNrdHYtdmVyLnBocA==") // /checktv-ver.php?ver=3.3
 
                 val response = ApiClient
                     .create(serverUrl)
-                    .checkServer(endpoint)
+                    .checkServer("$endpoint?ver=${Constants.APP_VERSION}")
 
+                Log.d("VERSION", "Main url -----  $endpoint?ver=${Constants.APP_VERSION}")
 
 
                 if (response.isSuccessful) {

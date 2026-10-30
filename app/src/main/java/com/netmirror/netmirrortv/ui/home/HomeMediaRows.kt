@@ -68,6 +68,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
+import com.netmirror.netmirrortv.utils.Constants
 import com.netmirror.netmirrortv.utils.TvFocusManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -574,7 +575,7 @@ private fun HomeMediaCard(
                                 if (!imgReferer.isNullOrBlank()) {
                                     setHeader("Referer", imgReferer)
                                 }
-                                setHeader("X-Requested-With", "NetmirrorNewTV v1.0")
+                                setHeader("X-Requested-With", Constants.X_REQUESTED_WITH)
                             }
                             .crossfade(false)
                             .build()
